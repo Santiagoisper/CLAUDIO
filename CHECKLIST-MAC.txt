@@ -1,0 +1,44 @@
+﻿CHECKLIST - CLAUDIO EN LA MAC
+
+1. Copiar el repo
+- Lleva el repo CLAUDIO a la Mac o clónalo ahí.
+
+2. Instalar herramientas base
+- Node.js 20+
+- pnpm
+- PowerShell 7 (pwsh) recomendado para usar los scripts .ps1
+
+3. Instalar dependencias
+- En la raíz del repo:
+  pnpm install
+
+4. Preparar variables de entorno
+- Copia .env.mac-template a .env
+- Completa las credenciales reales que quieras usar en la Mac
+- Si no quieres escritura en Gmail/GitHub, deja los flags en false
+
+5. Importar memoria
+- Copia el ZIP exportado dentro del repo
+- Ejecuta:
+  pwsh -File tools/import-memory.ps1 -ArchivePath ./claudio-memory-export-20260423-095037.zip
+
+6. Inicializar/verificar base
+- Ejecuta:
+  pnpm db:init
+
+7. Levantar CLAUDIO
+- Desarrollo:
+  pnpm dev:mcp
+- Producción local:
+  pnpm build
+  pnpm start:mcp
+
+8. Qué revisar si falla
+- .env incompleto
+- token de GitHub inválido o sin permisos
+- refresh token de Google sin scopes correctos
+- better-sqlite3 recompilado para otra versión de Node: resolver con pnpm install/rebuild en la Mac
+
+9. Resultado esperado
+- CLAUDIO arranca igual que acá
+- si importaste el ZIP, también conserva la memoria

@@ -1,0 +1,19 @@
+﻿CLAUDIO - paquete para llevar
+
+Contenido:
+- ZIP con la memoria local exportada de CLAUDIO
+
+Como importarlo en la Mac:
+1. Copia este ZIP dentro del repo CLAUDIO en la Mac.
+2. Abri terminal en la raiz del repo.
+3. Ejecuta:
+   pwsh -File tools/import-memory.ps1 -ArchivePath ./NOMBRE_DEL_ZIP
+
+Si no tenes pwsh:
+- instala PowerShell 7, o importa manualmente el contenido del ZIP reemplazando:
+  - data/claudio.db
+  - MEMORY.local.md (si existe en el ZIP)
+
+Notas:
+- El import hace backup de la memoria actual en data/backups/.
+- El funcionamiento de CLAUDIO sera el mismo en la Mac si tambien copias .env y tenes dependencias instaladas.

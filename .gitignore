@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.env
+data/claudio.db
+data/backups/
+claudio-memory-export-*.zip

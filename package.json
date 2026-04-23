@@ -1,0 +1,28 @@
+{
+  "name": "claudio",
+  "version": "1.0.0",
+  "description": "CLAUDIO — Asistente personal de Santiago",
+  "type": "module",
+  "scripts": {
+    "dev:mcp": "tsx --env-file=.env watch src/server.ts",
+    "start:mcp": "node --disable-warning=ExperimentalWarning dist/server.js",
+    "build": "tsc",
+    "db:init": "tsx src/db/init.ts",
+    "db:export": "tsx src/tools/export.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.9.0",
+    "archiver": "^7.0.1",
+    "dotenv": "^16.4.5",
+    "zod": "^3.22.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  },
+  "devDependencies": {
+    "@types/archiver": "^6.0.3",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.7.1",
+    "typescript": "^5.3.3"
+  }
+}
