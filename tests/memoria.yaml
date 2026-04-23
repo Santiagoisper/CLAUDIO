@@ -1,0 +1,67 @@
+providers:
+  - name: claude
+    type: ANTHROPIC
+    token: "{{ANTHROPIC_API_KEY}}"
+    model: claude-sonnet-4-6
+
+servers:
+  - name: claudio
+    type: sse
+    url: "https://claudio-production-759b.up.railway.app/sse"
+    headers:
+      - "Authorization: Bearer {{CLAUDIO_TOKEN}}"
+
+agents:
+  - name: claudio-agent
+    provider: claude
+    servers:
+      - name: claudio
+
+sessions:
+  - name: "Guardar y recuperar un recuerdo"
+    agent: claudio-agent
+    tests:
+      - name: "Guarda recuerdo nuevo"
+        prompt: "Usá la herramienta claudio_remember para guardar esto: kind='test', content='recuerdo de prueba benchmark'"
+        assertions:
+          - type: tool_called
+            tool: claudio_remember
+          - type: no_hallucinated_tools
+          - type: output_contains
+            value: "guardado"
+
+      - name: "Recupera el recuerdo guardado"
+        prompt: "Buscá en la memoria usando claudio_recall con query='recuerdo de prueba benchmark'"
+        assertions:
+          - type: tool_called
+            tool: claudio_recall
+          - type: output_contains
+            value: "prueba"
+
+      - name: "Lista memorias por categoría"
+        prompt: "Listá todas las memorias de kind='test' usando claudio_memories"
+        assertions:
+          - type: tool_called
+            tool: claudio_memories
+          - type: no_hallucinated_tools
+
+  - name: "Perfil de Santiago"
+    agent: claudio-agent
+    tests:
+      - name: "Obtiene el perfil"
+        prompt: "Obtené el perfil del usuario con claudio_profile"
+        assertions:
+          - type: tool_called
+            tool: claudio_profile
+          - type: output_contains
+            value: "Santiago"
+
+  - name: "No alucina herramientas"
+    agent: claudio-agent
+    tests:
+      - name: "Solo usa tools disponibles"
+        prompt: "¿Cuántos recuerdos hay guardados? Usá claudio_memories para contarlos"
+        assertions:
+          - type: no_hallucinated_tools
+          - type: tool_called
+            tool: claudio_memories

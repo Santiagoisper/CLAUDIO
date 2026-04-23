@@ -1,0 +1,22 @@
+providers:
+  - name: claude
+    type: ANTHROPIC
+    token: "{{ANTHROPIC_API_KEY}}"
+    model: claude-sonnet-4-6
+
+servers:
+  - name: claudio
+    type: sse
+    url: "{{CLAUDIO_URL}}/sse"
+    headers:
+      Authorization: "Bearer {{CLAUDIO_TOKEN}}"
+
+agents:
+  - name: claudio-agent
+    provider: claude
+    servers:
+      - claudio
+
+variables:
+  CLAUDIO_URL: "https://claudio-production-759b.up.railway.app"
+  CLAUDIO_TOKEN: "{{CLAUDIO_TOKEN}}"
