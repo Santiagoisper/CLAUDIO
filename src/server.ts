@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import "dotenv/config";
 import { registerMemoryTools } from "./tools/memory.js";
 import { registerGithubTools } from "./tools/github.js";
+import { registerShellTools } from "./tools/shell.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -34,6 +35,7 @@ function buildServer() {
   const s = new McpServer({ name: "claudio", version: "1.0.0" });
   registerMemoryTools(s);
   if (process.env.GITHUB_TOKEN) registerGithubTools(s);
+  registerShellTools(s);
   return s;
 }
 
