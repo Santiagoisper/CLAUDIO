@@ -39,7 +39,7 @@ export function registerMemoryTools(server: McpServer) {
 
   server.tool(
     "claudio_recall",
-    "Busca recuerdos por texto libre y/o categoría",
+    "Busca recuerdos por texto libre y/o categoría (búsqueda full-text con ranking de relevancia)",
     {
       query: z.string().describe("Texto a buscar"),
       kind: z.string().optional().describe("Filtrar por categoría"),
@@ -47,20 +47,42 @@ export function registerMemoryTools(server: McpServer) {
     },
     async ({ query, kind, limit }) => {
       const db = getDb();
-      const pattern = `%${query}%`;
       let rows: MemoryRow[];
-      if (kind) {
-        rows = db.prepare(`
-          SELECT id, kind, content, created_at FROM memories
-          WHERE (content LIKE ? OR kind LIKE ?) AND kind = ?
-          ORDER BY created_at DESC LIMIT ?
-        `).all(pattern, pattern, kind, limit) as unknown as MemoryRow[];
-      } else {
-        rows = db.prepare(`
-          SELECT id, kind, content, created_at FROM memories
-          WHERE content LIKE ? OR kind LIKE ?
-          ORDER BY created_at DESC LIMIT ?
-        `).all(pattern, pattern, limit) as unknown as MemoryRow[];
+      try {
+        if (kind) {
+          rows = db.prepare(`
+            SELECT m.id, m.kind, m.content, m.created_at
+            FROM memories_fts f
+            JOIN memories m ON m.rowid = f.rowid
+            WHERE memories_fts MATCH ? AND m.kind = ?
+            ORDER BY rank LIMIT ?
+          `).all(query, kind, limit) as unknown as MemoryRow[];
+        } else {
+          rows = db.prepare(`
+            SELECT m.id, m.kind, m.content, m.created_at
+            FROM memories_fts f
+            JOIN memories m ON m.rowid = f.rowid
+            WHERE memories_fts MATCH ?
+            ORDER BY rank LIMIT ?
+          `).all(query, limit) as unknown as MemoryRow[];
+        }
+      } catch (e) {
+        // Fallback a LIKE si la query contiene caracteres especiales de FTS
+        console.error("FTS5 query failed, falling back to LIKE:", e);
+        const pattern = `%${query}%`;
+        if (kind) {
+          rows = db.prepare(`
+            SELECT id, kind, content, created_at FROM memories
+            WHERE (content LIKE ? OR kind LIKE ?) AND kind = ?
+            ORDER BY created_at DESC LIMIT ?
+          `).all(pattern, pattern, kind, limit) as unknown as MemoryRow[];
+        } else {
+          rows = db.prepare(`
+            SELECT id, kind, content, created_at FROM memories
+            WHERE content LIKE ? OR kind LIKE ?
+            ORDER BY created_at DESC LIMIT ?
+          `).all(pattern, pattern, limit) as unknown as MemoryRow[];
+        }
       }
       if (rows.length === 0) {
         return { content: [{ type: "text" as const, text: "No se encontraron recuerdos." }] };
@@ -147,6 +169,93 @@ export function registerMemoryTools(server: McpServer) {
           text: `Nombre: ${profile.display_name}\nEmail: ${profile.email}`,
         }],
       };
+    }
+  );
+
+  server.tool(
+    "claudio_relate",
+    "Crea una relación entre dos recuerdos (ej: 'santiago' trabaja_en 'CLAUDIO')",
+    {
+      from_id: z.string().describe("ID del recuerdo origen"),
+      to_id: z.string().describe("ID del recuerdo destino"),
+      relation_type: z.string().describe("Tipo de relación (ej: trabaja_en, conoce_a, parte_de, usa)"),
+    },
+    async ({ from_id, to_id, relation_type }) => {
+      const db = getDb();
+      const id = randomUUID();
+      try {
+        db.prepare(`
+          INSERT OR IGNORE INTO relations (id, from_id, to_id, relation_type)
+          VALUES (?, ?, ?, ?)
+        `).run(id, from_id, to_id, relation_type);
+        return { content: [{ type: "text" as const, text: `Relación creada: ${from_id.slice(0, 8)} → [${relation_type}] → ${to_id.slice(0, 8)}` }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Error al crear relación: ${e}` }] };
+      }
+    }
+  );
+
+  server.tool(
+    "claudio_context",
+    "Devuelve un recuerdo con todas sus relaciones conectadas (contexto completo del grafo)",
+    {
+      id: z.string().describe("ID del recuerdo"),
+    },
+    async ({ id }) => {
+      const db = getDb();
+      const memory = db.prepare("SELECT * FROM memories WHERE id = ?").get(id) as MemoryRow | undefined;
+      if (!memory) {
+        return { content: [{ type: "text" as const, text: `No se encontró recuerdo con ID: ${id}` }] };
+      }
+      const related = db.prepare(`
+        SELECT m.id, m.kind, m.content, r.relation_type, 'out' as direction
+        FROM relations r JOIN memories m ON m.id = r.to_id WHERE r.from_id = ?
+        UNION ALL
+        SELECT m.id, m.kind, m.content, r.relation_type, 'in' as direction
+        FROM relations r JOIN memories m ON m.id = r.from_id WHERE r.to_id = ?
+      `).all(id, id) as Array<{ id: string; kind: string; content: string; relation_type: string; direction: string }>;
+
+      let text = `[${memory.kind}] (${memory.id.slice(0, 8)})\n${memory.content}`;
+      if (related.length > 0) {
+        text += `\n\nRelaciones (${related.length}):\n` + related.map(r =>
+          `  ${r.direction === 'out' ? '→' : '←'} [${r.relation_type}] [${r.kind}] ${r.content.slice(0, 80)}${r.content.length > 80 ? '…' : ''} (${r.id.slice(0, 8)})`
+        ).join('\n');
+      } else {
+        text += `\n\n(Sin relaciones registradas)`;
+      }
+      return { content: [{ type: "text" as const, text }] };
+    }
+  );
+
+  server.tool(
+    "claudio_status",
+    "Devuelve estado actual de CLAUDIO: fecha/hora Argentina, cantidad de recuerdos por categoría, último recuerdo registrado",
+    {},
+    async () => {
+      const db = getDb();
+      const counts = db.prepare(`
+        SELECT kind, COUNT(*) as total FROM memories GROUP BY kind ORDER BY total DESC
+      `).all() as Array<{ kind: string; total: number }>;
+      const last = db.prepare(`
+        SELECT content, kind, created_at FROM memories ORDER BY created_at DESC LIMIT 1
+      `).get() as { content: string; kind: string; created_at: string } | undefined;
+      const total = counts.reduce((acc, r) => acc + r.total, 0);
+      const now = new Date().toLocaleString("es-AR", {
+        timeZone: "America/Argentina/Buenos_Aires",
+        dateStyle: "full",
+        timeStyle: "medium",
+      });
+      const lines = [
+        `📅 ${now}`,
+        `🧠 Total de recuerdos: ${total}`,
+        counts.length > 0
+          ? `📂 Por categoría:\n${counts.map(r => `   ${r.kind}: ${r.total}`).join('\n')}`
+          : `📂 Sin recuerdos aún.`,
+        last
+          ? `🕐 Último: [${last.kind}] ${last.content.slice(0, 80)}${last.content.length > 80 ? '…' : ''} — ${last.created_at}`
+          : "",
+      ].filter(Boolean);
+      return { content: [{ type: "text" as const, text: lines.join('\n') }] };
     }
   );
 }
