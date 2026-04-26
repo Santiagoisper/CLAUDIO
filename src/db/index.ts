@@ -27,3 +27,13 @@ export function getDb(): DatabaseSync {
   }
   return _db;
 }
+
+export async function loadSqliteVec(db: DatabaseSync): Promise<boolean> {
+  try {
+    const { load } = await import("sqlite-vec");
+    load(db);
+    return true;
+  } catch {
+    return false;
+  }
+}

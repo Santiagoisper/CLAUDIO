@@ -9,6 +9,9 @@ import "dotenv/config";
 import { registerMemoryTools } from "./tools/memory.js";
 import { registerGithubTools } from "./tools/github.js";
 import { registerShellTools } from "./tools/shell.js";
+import { registerWebTools } from "./tools/web.js";
+import { registerBriefingTools, printBriefingToStderr } from "./tools/briefing.js";
+import { registerCalendarTools } from "./tools/calendar.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -36,6 +39,9 @@ function buildServer() {
   registerMemoryTools(s);
   if (process.env.GITHUB_TOKEN) registerGithubTools(s);
   registerShellTools(s);
+  registerWebTools(s);
+  registerBriefingTools(s);
+  if (process.env.GOOGLE_REFRESH_TOKEN) registerCalendarTools(s);
   return s;
 }
 
@@ -85,6 +91,7 @@ if (PORT) {
 } else {
   // ── Modo local: stdio para Claude Code ──────────────────────────────────
   syncPull();
+  printBriefingToStderr();
 
   const server = buildServer();
 
