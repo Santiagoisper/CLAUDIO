@@ -63,7 +63,7 @@ CREATE INDEX IF NOT EXISTS idx_relations_from ON relations (from_id);
 CREATE INDEX IF NOT EXISTS idx_relations_to ON relations (to_id);
 `;
 
-function main() {
+async function main() {
   const dbPath = process.env.CLAUDIO_DB_PATH
     ? path.resolve(process.env.CLAUDIO_DB_PATH)
     : path.resolve(__dirname, "../../data/claudio.db");
@@ -94,6 +94,19 @@ function main() {
     db.exec(`INSERT OR IGNORE INTO memories_fts(memories_fts) VALUES('rebuild')`);
   } catch (e) {
     console.warn("FTS5 no disponible, búsqueda full-text deshabilitada:", e);
+  }
+
+  // Vector table para búsqueda semántica (requiere sqlite-vec)
+  try {
+    const { load } = await import("sqlite-vec");
+    load(db);
+    db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
+      memory_id TEXT PRIMARY KEY,
+      embedding float[1536]
+    )`);
+    console.log("sqlite-vec cargado: búsqueda semántica habilitada.");
+  } catch (e) {
+    console.warn("sqlite-vec no disponible, búsqueda semántica deshabilitada:", e);
   }
 
   const profile = db.prepare("SELECT id FROM profiles WHERE id = 'santiago'").get();
