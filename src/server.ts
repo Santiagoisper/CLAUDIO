@@ -12,6 +12,7 @@ import { registerShellTools } from "./tools/shell.js";
 import { registerWebTools } from "./tools/web.js";
 import { registerBriefingTools, printBriefingToStderr } from "./tools/briefing.js";
 import { registerCalendarTools } from "./tools/calendar.js";
+import { registerGmailTools } from "./tools/gmail.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -42,6 +43,7 @@ function buildServer() {
   registerWebTools(s);
   registerBriefingTools(s);
   if (process.env.GOOGLE_REFRESH_TOKEN) registerCalendarTools(s);
+  if (process.env.GOOGLE_REFRESH_TOKEN) registerGmailTools(s);
   return s;
 }
 
