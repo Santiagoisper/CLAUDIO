@@ -71,10 +71,7 @@ if (PORT) {
   const TOKEN = process.env.CLAUDIO_TOKEN;
   if (TOKEN) assertStrongToken(TOKEN);
   const sessions = new Map<string, SSEServerTransport>();
-  const streamableTransport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-  });
-  await buildServer().connect(streamableTransport);
+  const streamableSessions = new Map<string, StreamableHTTPServerTransport>();
 
   function authed(req: IncomingMessage): boolean {
     if (!TOKEN) return true;
@@ -82,6 +79,20 @@ if (PORT) {
     const param = new URL(req.url!, "http://x").searchParams.get("token");
     const bearerToken = bearer?.startsWith("Bearer ") ? bearer.slice("Bearer ".length) : null;
     return safeTokenEquals(TOKEN, bearerToken) || safeTokenEquals(TOKEN, param);
+  }
+
+  function getMcpSessionId(req: IncomingMessage): string | undefined {
+    const raw = req.headers["mcp-session-id"];
+    if (Array.isArray(raw)) return raw[0];
+    return raw;
+  }
+
+  async function createStreamableSession(): Promise<StreamableHTTPServerTransport> {
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+    });
+    await buildServer().connect(transport);
+    return transport;
   }
 
   createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -107,7 +118,18 @@ if (PORT) {
     }
 
     if (url.pathname === "/mcp") {
-      await streamableTransport.handleRequest(req, res);
+      const sessionId = getMcpSessionId(req);
+      if (sessionId && !streamableSessions.has(sessionId)) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ error: "Unknown MCP session" }));
+      }
+      const transport = sessionId
+        ? streamableSessions.get(sessionId)!
+        : await createStreamableSession();
+      await transport.handleRequest(req, res);
+      if (!sessionId && transport.sessionId) {
+        streamableSessions.set(transport.sessionId, transport);
+      }
 
     } else if (req.method === "GET" && url.pathname === "/sse") {
       const transport = new SSEServerTransport("/messages", res);
