@@ -1,10 +1,18 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
+function sanitizeHeaderValue(value: string, fieldName: string): string {
+  if (/[\r\n\u0000]/.test(value)) {
+    throw new Error(`Invalid ${fieldName}: header injection attempt blocked.`);
+  }
+  return value;
+}
+
 async function getAccessToken(): Promise<string> {
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    signal: AbortSignal.timeout(30_000),
     body: new URLSearchParams({
       client_id: process.env.GOOGLE_CLIENT_ID!,
       client_secret: process.env.GOOGLE_CLIENT_SECRET!,
@@ -25,16 +33,24 @@ function buildRawMessage(params: {
   body: string;
   replyToMessageId?: string;
 }): string {
+  const safeTo = params.to.map(value => sanitizeHeaderValue(value, "to"));
+  const safeCc = params.cc?.map(value => sanitizeHeaderValue(value, "cc"));
+  const safeBcc = params.bcc?.map(value => sanitizeHeaderValue(value, "bcc"));
+  const safeSubject = sanitizeHeaderValue(params.subject, "subject");
+  const safeReplyToMessageId = params.replyToMessageId
+    ? sanitizeHeaderValue(params.replyToMessageId, "replyToMessageId")
+    : undefined;
+
   const lines: string[] = [
-    `To: ${params.to.join(", ")}`,
-    `Subject: ${params.subject}`,
+    `To: ${safeTo.join(", ")}`,
+    `Subject: ${safeSubject}`,
     "MIME-Version: 1.0",
     "Content-Type: text/plain; charset=UTF-8",
     "Content-Transfer-Encoding: quoted-printable",
   ];
-  if (params.cc?.length) lines.push(`Cc: ${params.cc.join(", ")}`);
-  if (params.bcc?.length) lines.push(`Bcc: ${params.bcc.join(", ")}`);
-  if (params.replyToMessageId) lines.push(`In-Reply-To: ${params.replyToMessageId}`, `References: ${params.replyToMessageId}`);
+  if (safeCc?.length) lines.push(`Cc: ${safeCc.join(", ")}`);
+  if (safeBcc?.length) lines.push(`Bcc: ${safeBcc.join(", ")}`);
+  if (safeReplyToMessageId) lines.push(`In-Reply-To: ${safeReplyToMessageId}`, `References: ${safeReplyToMessageId}`);
   lines.push("", params.body);
 
   return Buffer.from(lines.join("\r\n"))
@@ -62,6 +78,7 @@ export function registerGmailTools(server: McpServer) {
       const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/drafts", {
         method: "POST",
         headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(30_000),
         body: JSON.stringify({ message: { raw } }),
       });
       if (!res.ok) throw new Error(`Gmail draft error: ${await res.text()}`);
@@ -88,6 +105,7 @@ export function registerGmailTools(server: McpServer) {
         const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
           method: "POST",
           headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(30_000),
           body: JSON.stringify({ raw }),
         });
         if (!res.ok) throw new Error(`Gmail send error: ${await res.text()}`);
