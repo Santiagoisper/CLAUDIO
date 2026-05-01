@@ -1,9 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { execSync } from "node:child_process";
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import "dotenv/config";
@@ -66,10 +67,14 @@ function safeTokenEquals(expectedToken: string, candidate: string | null | undef
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : null;
 
 if (PORT) {
-  // ── Modo remoto: HTTP/SSE para Railway ──────────────────────────────────
+  // ── Modo remoto: HTTP (Streamable) + SSE legacy ────────────────────────
   const TOKEN = process.env.CLAUDIO_TOKEN;
   if (TOKEN) assertStrongToken(TOKEN);
   const sessions = new Map<string, SSEServerTransport>();
+  const streamableTransport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+  });
+  await buildServer().connect(streamableTransport);
 
   function authed(req: IncomingMessage): boolean {
     if (!TOKEN) return true;
@@ -101,7 +106,10 @@ if (PORT) {
       }
     }
 
-    if (req.method === "GET" && url.pathname === "/sse") {
+    if (url.pathname === "/mcp") {
+      await streamableTransport.handleRequest(req, res);
+
+    } else if (req.method === "GET" && url.pathname === "/sse") {
       const transport = new SSEServerTransport("/messages", res);
       sessions.set(transport.sessionId, transport);
       res.on("close", () => sessions.delete(transport.sessionId));
