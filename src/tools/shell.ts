@@ -1,16 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { execSync } from "node:child_process";
+import { execFile } from "node:child_process";
 
-// Lista blanca de prefijos de comandos permitidos
-const ALLOWED_PREFIXES = [
-  "git ", "ls ", "ls\n", "cat ", "pwd", "echo ",
-  "node ", "pnpm ", "npm ", "which ", "date", "whoami",
-];
+const SAFE_COMMANDS = new Set(["git", "ls", "cat", "pwd", "echo", "which", "date", "whoami"]);
+const SHELL_UNSAFE_ARG_PATTERN = /[;&|`$<>]/;
 
 export function registerShellTools(server: McpServer) {
-  // Solo registrar en modo local (sin PORT — no exponer en Railway)
-  if (process.env.PORT) return;
+  // Deshabilitado por defecto; requiere opt-in explícito.
+  if (process.env.CLAUDIO_ENABLE_SHELL !== "true") return;
 
   server.tool(
     "claudio_shell",
@@ -20,29 +17,56 @@ export function registerShellTools(server: McpServer) {
       cwd: z.string().optional().describe("Directorio de trabajo (default: directorio actual)"),
     },
     async ({ command, cwd }) => {
-      const allowed = ALLOWED_PREFIXES.some(p =>
-        command.trim() === p.trim() || command.trim().startsWith(p)
-      );
-      if (!allowed) {
+      const parts = command.trim().split(/\s+/).filter(Boolean);
+      if (parts.length === 0) {
         return {
           content: [{
             type: "text" as const,
-            text: `Comando no permitido: "${command.trim()}"\nComandos permitidos: ${ALLOWED_PREFIXES.map(p => p.trim()).join(", ")}`,
+            text: "Comando vacío.",
           }],
         };
       }
-      try {
-        const output = execSync(command, {
-          cwd: cwd ?? process.cwd(),
-          encoding: "utf-8",
-          timeout: 10_000,
-        });
-        return { content: [{ type: "text" as const, text: output.trim() || "(sin output)" }] };
-      } catch (e: any) {
+
+      const [executable, ...args] = parts;
+      if (!SAFE_COMMANDS.has(executable)) {
         return {
           content: [{
             type: "text" as const,
-            text: `Error (${e.status ?? "?"}): ${e.message}\n${e.stderr ?? ""}`.trim(),
+            text: `Comando no permitido: "${executable}". Permitidos: ${Array.from(SAFE_COMMANDS).join(", ")}`,
+          }],
+        };
+      }
+      if (args.some(arg => SHELL_UNSAFE_ARG_PATTERN.test(arg))) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: "Argumentos no permitidos: contiene metacaracteres peligrosos.",
+          }],
+        };
+      }
+
+      try {
+        const output = await new Promise<string>((resolve, reject) => {
+          execFile(executable, args, {
+            cwd: cwd ?? process.cwd(),
+            encoding: "utf-8",
+            timeout: 10_000,
+          }, (error, stdout, stderr) => {
+            if (error) {
+              const err = new Error(`Error (${(error as NodeJS.ErrnoException).name ?? "?"}): ${(error as Error).message}\n${stderr ?? ""}`.trim());
+              reject(err);
+              return;
+            }
+            resolve((stdout ?? "").toString());
+          });
+        });
+        return { content: [{ type: "text" as const, text: output.trim() || "(sin output)" }] };
+      } catch (e: any) {
+        const message = e instanceof Error ? e.message : String(e);
+        return {
+          content: [{
+            type: "text" as const,
+            text: message.trim(),
           }],
         };
       }

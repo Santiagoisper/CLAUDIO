@@ -48,6 +48,7 @@ function getGithubApiBaseUrl(): URL {
 async function ghFetch(path: string): Promise<unknown> {
   const base = getGithubApiBaseUrl();
   const res = await fetch(new URL(path, base), {
+    signal: AbortSignal.timeout(30_000),
     headers: {
       Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
       Accept: "application/vnd.github+json",
