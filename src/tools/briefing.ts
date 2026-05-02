@@ -39,24 +39,24 @@ function buildBriefingText(): string {
     timeStyle: "short",
   });
 
-  const totalMemories = counts.reduce((a, r) => a + r.total, 0);
+  const totalMemories = counts.reduce((acc, row) => acc + row.total, 0);
 
   const lines: string[] = [
-    `# Briefing de sesión — ${now}`,
-    `\n## 🧠 Memoria (${totalMemories} recuerdos)`,
-    counts.map((r) => `  ${r.kind}: ${r.total}`).join("\n"),
+    `# Briefing de sesion - ${now}`,
+    `\n## Memoria (${totalMemories} recuerdos)`,
+    counts.map((row) => `  ${row.kind}: ${row.total}`).join("\n"),
   ];
 
   if (projects.length > 0) {
-    lines.push(`\n## 🚀 Proyectos activos`);
-    lines.push(projects.map((p) => `  • ${p.content.slice(0, 120)}`).join("\n"));
+    lines.push(`\n## Proyectos activos`);
+    lines.push(projects.map((project) => `  - ${project.content.slice(0, 120)}`).join("\n"));
   }
 
   if (recent.length > 0) {
-    lines.push(`\n## 🕐 Últimas 24hs`);
-    lines.push(recent.map((r) => `  [${r.kind}] ${r.content.slice(0, 100)}`).join("\n"));
+    lines.push(`\n## Ultimas 24hs`);
+    lines.push(recent.map((row) => `  [${row.kind}] ${row.content.slice(0, 100)}`).join("\n"));
   } else {
-    lines.push(`\n## 🕐 Sin actividad reciente.`);
+    lines.push(`\n## Sin actividad reciente.`);
   }
 
   return lines.filter(Boolean).join("\n");
@@ -65,7 +65,7 @@ function buildBriefingText(): string {
 export function registerBriefingTools(server: McpServer) {
   server.tool(
     "claudio_briefing",
-    "Devuelve el briefing de inicio de sesión: memorias recientes, proyectos activos y resumen de contexto. Llamar al inicio de cada conversación.",
+    "Devuelve el briefing de inicio de sesion: memorias recientes, proyectos activos y resumen de contexto. Llamar al inicio de cada conversacion.",
     {},
     async () => {
       const text = buildBriefingText();
@@ -94,24 +94,24 @@ export function printBriefingToStderr(): void {
       timeStyle: "short",
     });
 
-    const total = counts.reduce((a, r) => a + r.total, 0);
+    const total = counts.reduce((acc, row) => acc + row.total, 0);
 
-    process.stderr.write(`\n=== CLAUDIO Briefing — ${now} ===\n`);
-    process.stderr.write(`🧠 ${total} recuerdos`);
+    process.stderr.write(`\n=== CLAUDIO Briefing - ${now} ===\n`);
+    process.stderr.write(`${total} recuerdos`);
     if (counts.length > 0) {
-      process.stderr.write(` (${counts.map((r) => `${r.kind}: ${r.total}`).join(", ")})`);
+      process.stderr.write(` (${counts.map((row) => `${row.kind}: ${row.total}`).join(", ")})`);
     }
     process.stderr.write("\n");
 
     if (recent.length > 0) {
-      process.stderr.write("🕐 Últimas 24hs:\n");
-      for (const r of recent) {
-        process.stderr.write(`  [${r.kind}] ${r.content.slice(0, 80)}\n`);
+      process.stderr.write("Ultimas 24hs:\n");
+      for (const row of recent) {
+        process.stderr.write(`  [${row.kind}] ${row.content.slice(0, 80)}\n`);
       }
     }
 
     process.stderr.write("================================\n\n");
-  } catch (e) {
-    console.warn("printBriefingToStderr error:", e);
+  } catch (error) {
+    console.warn("printBriefingToStderr error:", error);
   }
 }

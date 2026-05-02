@@ -2,6 +2,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { getDb, loadSqliteVec } from "../db/index.js";
+import { getNeonSql } from "../db/neon.js";
+import { registerNeonMemoryTools } from "./memory-neon.js";
 
 interface MemoryRow {
   id: string;
@@ -17,16 +19,24 @@ interface ProfileRow {
   created_at: string;
 }
 
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function formatErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function embed(text: string): Promise<number[]> {
   const res = await fetch("https://api.openai.com/v1/embeddings", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
     },
     body: JSON.stringify({ model: "text-embedding-3-small", input: text }),
   });
-  if (!res.ok) throw new Error(`OpenAI embeddings error: ${await res.text()}`);
+  if (!res.ok) throw new Error(`OpenAI embeddings error (${res.status})`);
   const data = await res.json() as { data: [{ embedding: number[] }] };
   return data.data[0].embedding;
 }
@@ -38,17 +48,22 @@ async function maybeStoreEmbedding(id: string, content: string): Promise<void> {
     const db = getDb();
     db.prepare(`INSERT OR REPLACE INTO memories_vec (memory_id, embedding) VALUES (?, ?)`)
       .run(id, JSON.stringify(embedding));
-  } catch (e) {
-    console.error("Error storing embedding:", e);
+  } catch (error) {
+    console.error("Error storing embedding:", error);
   }
 }
 
 export function registerMemoryTools(server: McpServer) {
+  if (getNeonSql()) {
+    registerNeonMemoryTools(server);
+    return;
+  }
+
   server.tool(
     "claudio_remember",
     "Guarda un nuevo recuerdo o dato sobre Santiago",
     {
-      kind: z.string().describe("Categoría del recuerdo (ej: biografia, proyecto, contacto, nota)"),
+      kind: z.string().describe("Categoria del recuerdo (ej: biografia, proyecto, contacto, nota)"),
       content: z.string().describe("Contenido del recuerdo"),
       metadata: z.record(z.unknown()).optional().describe("Metadatos adicionales"),
     },
@@ -68,11 +83,11 @@ export function registerMemoryTools(server: McpServer) {
 
   server.tool(
     "claudio_recall",
-    "Busca recuerdos por texto libre y/o categoría (búsqueda full-text con ranking de relevancia)",
+    "Busca recuerdos por texto libre y/o categoria (busqueda full-text con ranking de relevancia)",
     {
       query: z.string().describe("Texto a buscar"),
-      kind: z.string().optional().describe("Filtrar por categoría"),
-      limit: z.number().int().min(1).max(50).default(10).describe("Máximo de resultados"),
+      kind: z.string().optional().describe("Filtrar por categoria"),
+      limit: z.number().int().min(1).max(50).default(10).describe("Maximo de resultados"),
     },
     async ({ query, kind, limit }) => {
       const db = getDb();
@@ -95,9 +110,8 @@ export function registerMemoryTools(server: McpServer) {
             ORDER BY rank LIMIT ?
           `).all(query, limit) as unknown as MemoryRow[];
         }
-      } catch (e) {
-        // Fallback a LIKE si la query contiene caracteres especiales de FTS
-        console.error("FTS5 query failed, falling back to LIKE:", e);
+      } catch (error) {
+        console.error("FTS5 query failed, falling back to LIKE:", error);
         const pattern = `%${query}%`;
         if (kind) {
           rows = db.prepare(`
@@ -116,16 +130,16 @@ export function registerMemoryTools(server: McpServer) {
       if (rows.length === 0) {
         return { content: [{ type: "text" as const, text: "No se encontraron recuerdos." }] };
       }
-      const text = rows.map(r => `[${r.kind}] (${r.id.slice(0, 8)})\n${r.content}`).join("\n\n---\n\n");
+      const text = rows.map((row) => `[${row.kind}] (${row.id.slice(0, 8)})\n${row.content}`).join("\n\n---\n\n");
       return { content: [{ type: "text" as const, text }] };
     }
   );
 
   server.tool(
     "claudio_memories",
-    "Lista todos los recuerdos, opcionalmente filtrados por categoría",
+    "Lista todos los recuerdos, opcionalmente filtrados por categoria",
     {
-      kind: z.string().optional().describe("Filtrar por categoría"),
+      kind: z.string().optional().describe("Filtrar por categoria"),
     },
     async ({ kind }) => {
       const db = getDb();
@@ -142,9 +156,9 @@ export function registerMemoryTools(server: McpServer) {
       if (rows.length === 0) {
         return { content: [{ type: "text" as const, text: "No hay recuerdos." }] };
       }
-      const text = rows.map(r =>
-        `[${r.kind}] (${r.id.slice(0, 8)}) — ${r.content.slice(0, 100)}${r.content.length > 100 ? "…" : ""}`
-      ).join("\n");
+      const text = rows
+        .map((row) => `[${row.kind}] (${row.id.slice(0, 8)}) - ${truncate(row.content, 100)}`)
+        .join("\n");
       return { content: [{ type: "text" as const, text: `${rows.length} recuerdos:\n\n${text}` }] };
     }
   );
@@ -160,7 +174,7 @@ export function registerMemoryTools(server: McpServer) {
       const db = getDb();
       const result = db.prepare("UPDATE memories SET content = ? WHERE id = ?").run(content, id);
       if (result.changes === 0) {
-        return { content: [{ type: "text" as const, text: `No se encontró recuerdo con ID: ${id}` }] };
+        return { content: [{ type: "text" as const, text: `No se encontro recuerdo con ID: ${id}` }] };
       }
       return { content: [{ type: "text" as const, text: `Recuerdo ${id.slice(0, 8)} actualizado.` }] };
     }
@@ -176,7 +190,7 @@ export function registerMemoryTools(server: McpServer) {
       const db = getDb();
       const result = db.prepare("DELETE FROM memories WHERE id = ?").run(id);
       if (result.changes === 0) {
-        return { content: [{ type: "text" as const, text: `No se encontró recuerdo con ID: ${id}` }] };
+        return { content: [{ type: "text" as const, text: `No se encontro recuerdo con ID: ${id}` }] };
       }
       return { content: [{ type: "text" as const, text: `Recuerdo ${id.slice(0, 8)} eliminado.` }] };
     }
@@ -203,11 +217,11 @@ export function registerMemoryTools(server: McpServer) {
 
   server.tool(
     "claudio_relate",
-    "Crea una relación entre dos recuerdos (ej: 'santiago' trabaja_en 'CLAUDIO')",
+    "Crea una relacion entre dos recuerdos (ej: 'santiago' trabaja_en 'CLAUDIO')",
     {
       from_id: z.string().describe("ID del recuerdo origen"),
       to_id: z.string().describe("ID del recuerdo destino"),
-      relation_type: z.string().describe("Tipo de relación (ej: trabaja_en, conoce_a, parte_de, usa)"),
+      relation_type: z.string().describe("Tipo de relacion (ej: trabaja_en, conoce_a, parte_de, usa)"),
     },
     async ({ from_id, to_id, relation_type }) => {
       const db = getDb();
@@ -217,9 +231,19 @@ export function registerMemoryTools(server: McpServer) {
           INSERT OR IGNORE INTO relations (id, from_id, to_id, relation_type)
           VALUES (?, ?, ?, ?)
         `).run(id, from_id, to_id, relation_type);
-        return { content: [{ type: "text" as const, text: `Relación creada: ${from_id.slice(0, 8)} → [${relation_type}] → ${to_id.slice(0, 8)}` }] };
-      } catch (e) {
-        return { content: [{ type: "text" as const, text: `Error al crear relación: ${e}` }] };
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Relacion creada: ${from_id.slice(0, 8)} -> [${relation_type}] -> ${to_id.slice(0, 8)}`,
+          }],
+        };
+      } catch (error) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Error al crear relacion: ${formatErrorMessage(error)}`,
+          }],
+        };
       }
     }
   );
@@ -234,7 +258,7 @@ export function registerMemoryTools(server: McpServer) {
       const db = getDb();
       const memory = db.prepare("SELECT * FROM memories WHERE id = ?").get(id) as MemoryRow | undefined;
       if (!memory) {
-        return { content: [{ type: "text" as const, text: `No se encontró recuerdo con ID: ${id}` }] };
+        return { content: [{ type: "text" as const, text: `No se encontro recuerdo con ID: ${id}` }] };
       }
       const related = db.prepare(`
         SELECT m.id, m.kind, m.content, r.relation_type, 'out' as direction
@@ -246,11 +270,12 @@ export function registerMemoryTools(server: McpServer) {
 
       let text = `[${memory.kind}] (${memory.id.slice(0, 8)})\n${memory.content}`;
       if (related.length > 0) {
-        text += `\n\nRelaciones (${related.length}):\n` + related.map(r =>
-          `  ${r.direction === 'out' ? '→' : '←'} [${r.relation_type}] [${r.kind}] ${r.content.slice(0, 80)}${r.content.length > 80 ? '…' : ''} (${r.id.slice(0, 8)})`
-        ).join('\n');
+        text += `\n\nRelaciones (${related.length}):\n`;
+        text += related
+          .map((row) => `  ${row.direction === "out" ? "->" : "<-"} [${row.relation_type}] [${row.kind}] ${truncate(row.content, 80)} (${row.id.slice(0, 8)})`)
+          .join("\n");
       } else {
-        text += `\n\n(Sin relaciones registradas)`;
+        text += "\n\n(Sin relaciones registradas)";
       }
       return { content: [{ type: "text" as const, text }] };
     }
@@ -258,7 +283,7 @@ export function registerMemoryTools(server: McpServer) {
 
   server.tool(
     "claudio_status",
-    "Devuelve estado actual de CLAUDIO: fecha/hora Argentina, cantidad de recuerdos por categoría, último recuerdo registrado",
+    "Devuelve estado actual de CLAUDIO: fecha/hora Argentina, cantidad de recuerdos por categoria, ultimo recuerdo registrado",
     {},
     async () => {
       const db = getDb();
@@ -268,30 +293,28 @@ export function registerMemoryTools(server: McpServer) {
       const last = db.prepare(`
         SELECT content, kind, created_at FROM memories ORDER BY created_at DESC LIMIT 1
       `).get() as { content: string; kind: string; created_at: string } | undefined;
-      const total = counts.reduce((acc, r) => acc + r.total, 0);
+      const total = counts.reduce((acc, row) => acc + row.total, 0);
       const now = new Date().toLocaleString("es-AR", {
         timeZone: "America/Argentina/Buenos_Aires",
         dateStyle: "full",
         timeStyle: "medium",
       });
       const lines = [
-        `📅 ${now}`,
-        `🧠 Total de recuerdos: ${total}`,
+        `Fecha: ${now}`,
+        `Total de recuerdos: ${total}`,
         counts.length > 0
-          ? `📂 Por categoría:\n${counts.map(r => `   ${r.kind}: ${r.total}`).join('\n')}`
-          : `📂 Sin recuerdos aún.`,
-        last
-          ? `🕐 Último: [${last.kind}] ${last.content.slice(0, 80)}${last.content.length > 80 ? '…' : ''} — ${last.created_at}`
-          : "",
+          ? `Por categoria:\n${counts.map((row) => `   ${row.kind}: ${row.total}`).join("\n")}`
+          : "Sin recuerdos aun.",
+        last ? `Ultimo: [${last.kind}] ${truncate(last.content, 80)} - ${last.created_at}` : "",
       ].filter(Boolean);
-      return { content: [{ type: "text" as const, text: lines.join('\n') }] };
+      return { content: [{ type: "text" as const, text: lines.join("\n") }] };
     }
   );
 
   if (process.env.OPENAI_API_KEY) {
     server.tool(
       "claudio_recall_semantic",
-      "Busca recuerdos por SIGNIFICADO semántico (no por palabras exactas). Ideal para: '¿qué sé sobre finanzas?', 'proyectos relacionados con IA'. Usa embeddings de OpenAI.",
+      "Busca recuerdos por significado semantico (no por palabras exactas). Ideal para temas y relaciones conceptuales. Usa embeddings de OpenAI.",
       {
         query: z.string(),
         limit: z.number().int().min(1).max(20).default(5),
@@ -299,13 +322,12 @@ export function registerMemoryTools(server: McpServer) {
       async ({ query, limit }) => {
         const db = getDb();
 
-        // Verificar que sqlite-vec esté disponible
         const vecAvailable = await loadSqliteVec(db);
         if (!vecAvailable) {
           return {
             content: [{
               type: "text" as const,
-              text: "sqlite-vec no está disponible. La búsqueda semántica no puede ejecutarse. Usa claudio_recall para búsqueda por texto.",
+              text: "sqlite-vec no esta disponible. La busqueda semantica no puede ejecutarse. Usa claudio_recall para busqueda por texto.",
             }],
           };
         }
@@ -313,11 +335,11 @@ export function registerMemoryTools(server: McpServer) {
         let embedding: number[];
         try {
           embedding = await embed(query);
-        } catch (e) {
+        } catch (error) {
           return {
             content: [{
               type: "text" as const,
-              text: `Error generando embedding: ${e}`,
+              text: `Error generando embedding: ${formatErrorMessage(error)}`,
             }],
           };
         }
@@ -331,11 +353,11 @@ export function registerMemoryTools(server: McpServer) {
             WHERE v.embedding MATCH ? AND k = ?
             ORDER BY v.distance
           `).all(JSON.stringify(embedding), limit) as Array<{ id: string; kind: string; content: string; distance: number }>;
-        } catch (e) {
+        } catch (error) {
           return {
             content: [{
               type: "text" as const,
-              text: `Error en búsqueda semántica: ${e}. Es posible que sqlite-vec no esté correctamente instalado.`,
+              text: `Error en busqueda semantica: ${formatErrorMessage(error)}. Es posible que sqlite-vec no este correctamente instalado.`,
             }],
           };
         }
@@ -344,13 +366,13 @@ export function registerMemoryTools(server: McpServer) {
           return {
             content: [{
               type: "text" as const,
-              text: "No se encontraron recuerdos semánticamente similares.",
+              text: "No se encontraron recuerdos semanticamente similares.",
             }],
           };
         }
 
         const text = rows
-          .map((r) => `[${r.kind}] (${r.id.slice(0, 8)}) — similitud: ${(1 - r.distance).toFixed(3)}\n${r.content}`)
+          .map((row) => `[${row.kind}] (${row.id.slice(0, 8)}) - similitud: ${(1 - row.distance).toFixed(3)}\n${row.content}`)
           .join("\n\n---\n\n");
         return { content: [{ type: "text" as const, text }] };
       }

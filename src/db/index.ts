@@ -6,24 +6,44 @@ import "dotenv/config";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BUNDLED = path.resolve(__dirname, "../../data/claudio.db");
+const TMP_FALLBACK = "/tmp/claudio.db";
 
 let _db: DatabaseSync | null = null;
 
 export function getDb(): DatabaseSync {
   if (!_db) {
-    const dbPath = process.env.CLAUDIO_DB_PATH
+    const preferredDbPath = process.env.CLAUDIO_DB_PATH
       ? path.resolve(process.env.CLAUDIO_DB_PATH)
       : BUNDLED;
 
-    // En Railway: si el volumen está vacío, arranca con la DB del repo
-    if (dbPath !== BUNDLED && !fs.existsSync(dbPath) && fs.existsSync(BUNDLED)) {
-      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-      fs.copyFileSync(BUNDLED, dbPath);
-    }
+    const ensureSeededDb = (dbPath: string) => {
+      if (dbPath !== BUNDLED && !fs.existsSync(dbPath) && fs.existsSync(BUNDLED)) {
+        fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+        fs.copyFileSync(BUNDLED, dbPath);
+      }
+    };
 
-    _db = new DatabaseSync(dbPath);
-    _db.exec("PRAGMA journal_mode = WAL");
-    _db.exec("PRAGMA foreign_keys = ON");
+    const openDb = (dbPath: string) => {
+      ensureSeededDb(dbPath);
+      const db = new DatabaseSync(dbPath);
+      db.exec("PRAGMA journal_mode = WAL");
+      db.exec("PRAGMA foreign_keys = ON");
+      return db;
+    };
+
+    try {
+      _db = openDb(preferredDbPath);
+    } catch (error) {
+      if (preferredDbPath === TMP_FALLBACK) {
+        throw error;
+      }
+      // Hosted free tiers sometimes deny custom volume paths; fall back to /tmp.
+      // console.warn(
+      //   `[CLAUDIO] Cannot use CLAUDIO_DB_PATH="${preferredDbPath}". Falling back to ${TMP_FALLBACK}.`,
+      //   error instanceof Error ? error.message : String(error),
+      // );
+      _db = openDb(TMP_FALLBACK);
+    }
   }
   return _db;
 }

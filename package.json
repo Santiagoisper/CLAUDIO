@@ -4,16 +4,17 @@
   "description": "CLAUDIO — Asistente personal de Santiago",
   "type": "module",
   "scripts": {
-    "dev:mcp": "tsx --env-file=.env watch src/server.ts",
+    "dev:mcp": "tsx watch --env-file=.env src/server.ts",
     "start:mcp": "node --disable-warning=ExperimentalWarning dist/server.js",
     "build": "tsc",
     "db:init": "tsx src/db/init.ts",
     "db:export": "tsx src/tools/export.ts",
     "start": "node --disable-warning=ExperimentalWarning dist/server.js",
-    "test": "agent-benchmark -f tests/memoria.yaml -reportType json,html"
+    "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --runInBand"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.9.0",
+    "@neondatabase/serverless": "^0.10.4",
     "archiver": "^7.0.1",
     "dotenv": "^16.4.5",
     "openai": "^4.0.0",
@@ -24,11 +25,16 @@
     "node": ">=22.5.0"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   },
   "devDependencies": {
     "@types/archiver": "^6.0.3",
+    "@types/jest": "^29.5.14",
     "@types/node": "^22.0.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.4.5",
     "tsx": "^4.7.1",
     "typescript": "^5.3.3"
   }

@@ -20,7 +20,7 @@ async function getAccessToken(): Promise<string> {
       grant_type: "refresh_token",
     }),
   });
-  if (!res.ok) throw new Error(`Google OAuth error: ${await res.text()}`);
+  if (!res.ok) throw new Error(`Google OAuth error (${res.status})`);
   const data = await res.json() as { access_token: string };
   return data.access_token;
 }
@@ -33,9 +33,9 @@ function buildRawMessage(params: {
   body: string;
   replyToMessageId?: string;
 }): string {
-  const safeTo = params.to.map(value => sanitizeHeaderValue(value, "to"));
-  const safeCc = params.cc?.map(value => sanitizeHeaderValue(value, "cc"));
-  const safeBcc = params.bcc?.map(value => sanitizeHeaderValue(value, "bcc"));
+  const safeTo = params.to.map((value) => sanitizeHeaderValue(value, "to"));
+  const safeCc = params.cc?.map((value) => sanitizeHeaderValue(value, "cc"));
+  const safeBcc = params.bcc?.map((value) => sanitizeHeaderValue(value, "bcc"));
   const safeSubject = sanitizeHeaderValue(params.subject, "subject");
   const safeReplyToMessageId = params.replyToMessageId
     ? sanitizeHeaderValue(params.replyToMessageId, "replyToMessageId")
@@ -63,7 +63,7 @@ function buildRawMessage(params: {
 export function registerGmailTools(server: McpServer) {
   server.tool(
     "claudio_gmail_draft",
-    "Crea un borrador de email en Gmail. No lo envía — queda guardado en Drafts para que Santiago lo revise y envíe manualmente.",
+    "Crea un borrador de email en Gmail. No lo envia; queda guardado en Drafts para que Santiago lo revise y lo envie manualmente.",
     {
       to: z.array(z.string().email()),
       subject: z.string(),
@@ -77,20 +77,20 @@ export function registerGmailTools(server: McpServer) {
 
       const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/drafts", {
         method: "POST",
-        headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         signal: AbortSignal.timeout(30_000),
         body: JSON.stringify({ message: { raw } }),
       });
-      if (!res.ok) throw new Error(`Gmail draft error: ${await res.text()}`);
+      if (!res.ok) throw new Error(`Gmail draft error (${res.status})`);
 
-      return { content: [{ type: "text" as const, text: `Borrador creado → Para: ${to.join(", ")} | Asunto: ${subject}` }] };
+      return { content: [{ type: "text" as const, text: `Borrador creado -> Para: ${to.join(", ")} | Asunto: ${subject}` }] };
     }
   );
 
   if (process.env.CLAUDIO_ENABLE_GMAIL_WRITE === "true") {
     server.tool(
       "claudio_gmail_send",
-      "Envía un email directamente desde Gmail de Santiago. Solo disponible si CLAUDIO_ENABLE_GMAIL_WRITE=true.",
+      "Envia un email directamente desde Gmail de Santiago. Solo disponible si CLAUDIO_ENABLE_GMAIL_WRITE=true.",
       {
         to: z.array(z.string().email()),
         subject: z.string(),
@@ -104,14 +104,14 @@ export function registerGmailTools(server: McpServer) {
 
         const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
           method: "POST",
-          headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
           signal: AbortSignal.timeout(30_000),
           body: JSON.stringify({ raw }),
         });
-        if (!res.ok) throw new Error(`Gmail send error: ${await res.text()}`);
+        if (!res.ok) throw new Error(`Gmail send error (${res.status})`);
 
         const data = await res.json() as { id: string };
-        return { content: [{ type: "text" as const, text: `Email enviado ✓ | Para: ${to.join(", ")} | Asunto: ${subject} | ID: ${data.id}` }] };
+        return { content: [{ type: "text" as const, text: `Email enviado | Para: ${to.join(", ")} | Asunto: ${subject} | ID: ${data.id}` }] };
       }
     );
   }

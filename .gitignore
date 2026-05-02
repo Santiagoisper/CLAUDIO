@@ -4,3 +4,14 @@ dist/
 data/backups/
 claudio-memory-export-*.zip
 package-lock.json
+.cursor/
+.webui_secret_key
+*.log
+.tmp_*/
+.tmp_*
+tmp*
+MEMORY.local.md
+nul
+data/*.db-shm
+data/*.db-wal
+data/test-export.json

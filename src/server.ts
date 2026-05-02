@@ -4,6 +4,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { execSync } from "node:child_process";
+import fs from "node:fs";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -149,14 +150,34 @@ if (PORT) {
 
 } else {
   // ── Modo local: stdio para Claude Code ──────────────────────────────────
-  syncPull();
-  printBriefingToStderr();
+  try {
+    fs.writeFileSync(path.resolve(process.cwd(), "mcp-debug.log"), `[${new Date().toISOString()}] Arrancando servidor en stdio mode...\n`, { flag: 'a' });
+    
+    // syncPull();
+    // printBriefingToStderr(); 
 
-  const server = buildServer();
+    const server = buildServer();
+    fs.writeFileSync(path.resolve(process.cwd(), "mcp-debug.log"), `[${new Date().toISOString()}] buildServer completado.\n`, { flag: 'a' });
 
-  function shutdown() { syncPush(); process.exit(0); }
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+    function shutdown() {
+      try {
+        syncPush();
+      } catch (e) {
+        fs.writeFileSync(path.resolve(process.cwd(), "mcp-debug.log"), `[${new Date().toISOString()}] Error en shutdown syncPush: ${e}\n`, { flag: 'a' });
+      }
+      process.exit(0);
+    }
 
-  await server.connect(new StdioServerTransport());
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+
+    fs.writeFileSync(path.resolve(process.cwd(), "mcp-debug.log"), `[${new Date().toISOString()}] Conectando StdioServerTransport...\n`, { flag: 'a' });
+    await server.connect(new StdioServerTransport());
+    fs.writeFileSync(path.resolve(process.cwd(), "mcp-debug.log"), `[${new Date().toISOString()}] Transporte conectado. Escuchando a Codex.\n`, { flag: 'a' });
+    
+    setInterval(() => {}, 1000);
+  } catch (error) {
+    fs.writeFileSync(path.resolve(process.cwd(), "mcp-debug.log"), `[${new Date().toISOString()}] ERROR FATAL CAPTURADO: ${error}\n${(error as Error).stack}\n`, { flag: 'a' });
+    process.exit(1);
+  }
 }

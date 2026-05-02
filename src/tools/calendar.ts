@@ -12,7 +12,7 @@ async function getAccessToken(): Promise<string> {
       grant_type: "refresh_token",
     }),
   });
-  if (!res.ok) throw new Error(`Google OAuth error: ${await res.text()}`);
+  if (!res.ok) throw new Error(`Google OAuth error (${res.status})`);
   const data = await res.json() as { access_token: string };
   return data.access_token;
 }
@@ -26,9 +26,9 @@ function formatEvent(event: {
 }): string {
   const start = event.start?.dateTime ?? event.start?.date ?? "Sin fecha";
   const end = event.end?.dateTime ?? event.end?.date ?? "";
-  const location = event.location ? `\n  📍 ${event.location}` : "";
-  const description = event.description ? `\n  📝 ${event.description.slice(0, 100)}` : "";
-  return `📅 ${event.summary ?? "(sin título)"}\n  🕐 ${start}${end ? ` → ${end}` : ""}${location}${description}`;
+  const location = event.location ? `\n  Lugar: ${event.location}` : "";
+  const description = event.description ? `\n  Nota: ${event.description.slice(0, 100)}` : "";
+  return `Evento: ${event.summary ?? "(sin titulo)"}\n  Hora: ${start}${end ? ` -> ${end}` : ""}${location}${description}`;
 }
 
 export function registerCalendarTools(server: McpServer) {
@@ -40,7 +40,7 @@ export function registerCalendarTools(server: McpServer) {
       const token = await getAccessToken();
 
       const now = new Date();
-      const tzOffset = -3 * 60; // America/Argentina/Buenos_Aires (UTC-3)
+      const tzOffset = -3 * 60;
       const localNow = new Date(now.getTime() + (tzOffset - now.getTimezoneOffset()) * 60000);
 
       const year = localNow.getFullYear();
@@ -57,9 +57,9 @@ export function registerCalendarTools(server: McpServer) {
       url.searchParams.set("orderBy", "startTime");
 
       const res = await fetch(url.toString(), {
-        headers: { "Authorization": `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) throw new Error(`Google Calendar error: ${await res.text()}`);
+      if (!res.ok) throw new Error(`Google Calendar error (${res.status})`);
 
       const data = await res.json() as { items?: unknown[] };
       const items = (data.items ?? []) as Parameters<typeof formatEvent>[0][];
@@ -75,7 +75,7 @@ export function registerCalendarTools(server: McpServer) {
 
   server.tool(
     "claudio_calendar_events",
-    "Lista los próximos eventos del calendario de Santiago",
+    "Lista los proximos eventos del calendario de Santiago",
     {
       days_ahead: z.number().int().min(1).max(30).default(7),
       calendar_id: z.string().default("primary").optional(),
@@ -95,15 +95,15 @@ export function registerCalendarTools(server: McpServer) {
       url.searchParams.set("maxResults", "20");
 
       const res = await fetch(url.toString(), {
-        headers: { "Authorization": `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) throw new Error(`Google Calendar error: ${await res.text()}`);
+      if (!res.ok) throw new Error(`Google Calendar error (${res.status})`);
 
       const data = await res.json() as { items?: unknown[] };
       const items = (data.items ?? []) as Parameters<typeof formatEvent>[0][];
 
       if (items.length === 0) {
-        return { content: [{ type: "text" as const, text: `No hay eventos en los próximos ${days_ahead} días.` }] };
+        return { content: [{ type: "text" as const, text: `No hay eventos en los proximos ${days_ahead} dias.` }] };
       }
 
       const text = items.map(formatEvent).join("\n\n");
@@ -125,7 +125,7 @@ export function registerCalendarTools(server: McpServer) {
       async ({ title, start, end, description, location }) => {
         const token = await getAccessToken();
 
-        const isDateTime = (s: string) => s.includes("T");
+        const isDateTime = (value: string) => value.includes("T");
         const body: Record<string, unknown> = {
           summary: title,
           start: isDateTime(start) ? { dateTime: start } : { date: start },
@@ -134,24 +134,21 @@ export function registerCalendarTools(server: McpServer) {
         if (description) body.description = description;
         if (location) body.location = location;
 
-        const res = await fetch(
-          "https://www.googleapis.com/calendar/v3/calendars/primary/events",
-          {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${token}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(body),
-          }
-        );
-        if (!res.ok) throw new Error(`Google Calendar create error: ${await res.text()}`);
+        const res = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(`Google Calendar create error (${res.status})`);
 
         const event = await res.json() as { htmlLink?: string };
         return {
           content: [{
             type: "text" as const,
-            text: `Evento creado: ${title} — ${start}\n${event.htmlLink ?? ""}`,
+            text: `Evento creado: ${title} - ${start}\n${event.htmlLink ?? ""}`,
           }],
         };
       }
