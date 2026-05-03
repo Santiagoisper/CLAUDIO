@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
+import express from "express";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import { randomUUID, timingSafeEqual } from "node:crypto";
@@ -96,57 +97,62 @@ if (PORT) {
     return transport;
   }
 
-  createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    const url = new URL(req.url!, "http://x");
+  const app = express();
+  const webPath = path.resolve(ROOT, "web", "dist", "public");
 
-    if (url.pathname === "/health") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ ok: true }));
-    }
+  // Servir archivos estáticos del frontend
+  app.use(express.static(webPath));
 
-    if (!authed(req)) {
-      res.writeHead(401, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ error: "Unauthorized" }));
-    }
+  // Health check
+  app.get("/health", (req, res) => {
+    res.json({ ok: true });
+  });
 
-    if (req.method === "POST") {
-      const contentLengthHeader = req.headers["content-length"];
-      const contentLength = Number(contentLengthHeader ?? "0");
-      if (Number.isFinite(contentLength) && contentLength > MAX_HTTP_BODY_BYTES) {
-        res.writeHead(413, { "Content-Type": "application/json" });
-        return res.end(JSON.stringify({ error: "Payload too large" }));
+  // Rutas de la API MCP
+  app.use(async (req: any, res: any, next: any) => {
+    if (req.path.startsWith("/api/mcp") || req.path === "/mcp" || req.path === "/sse" || req.path === "/messages") {
+      if (!authed(req)) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
       }
     }
+    next();
+  });
 
-    if (url.pathname === "/mcp") {
-      const sessionId = getMcpSessionId(req);
-      if (sessionId && !streamableSessions.has(sessionId)) {
-        res.writeHead(404, { "Content-Type": "application/json" });
-        return res.end(JSON.stringify({ error: "Unknown MCP session" }));
-      }
-      const transport = sessionId
-        ? streamableSessions.get(sessionId)!
-        : await createStreamableSession();
-      await transport.handleRequest(req, res);
-      if (!sessionId && transport.sessionId) {
-        streamableSessions.set(transport.sessionId, transport);
-      }
-
-    } else if (req.method === "GET" && url.pathname === "/sse") {
-      const transport = new SSEServerTransport("/messages", res);
-      sessions.set(transport.sessionId, transport);
-      res.on("close", () => sessions.delete(transport.sessionId));
-      await buildServer().connect(transport);
-
-    } else if (req.method === "POST" && url.pathname === "/messages") {
-      const t = sessions.get(url.searchParams.get("sessionId") ?? "");
-      if (!t) return res.writeHead(404).end();
-      await t.handlePostMessage(req, res);
-
-    } else {
-      res.writeHead(404).end();
+  app.post("/mcp", async (req: any, res: any) => {
+    const sessionId = getMcpSessionId(req);
+    if (sessionId && !streamableSessions.has(sessionId)) {
+      res.status(404).json({ error: "Unknown MCP session" });
+      return;
     }
-  }).listen(PORT, () => console.log(`CLAUDIO escuchando en :${PORT}`));
+    const transport = sessionId
+      ? streamableSessions.get(sessionId)!
+      : await createStreamableSession();
+    await transport.handleRequest(req, res);
+    if (!sessionId && transport.sessionId) {
+      streamableSessions.set(transport.sessionId, transport);
+    }
+  });
+
+  app.get("/sse", (req: any, res: any) => {
+    const transport = new SSEServerTransport("/messages", res);
+    sessions.set(transport.sessionId, transport);
+    res.on("close", () => sessions.delete(transport.sessionId));
+    buildServer().connect(transport);
+  });
+
+  app.post("/messages", async (req: any, res: any) => {
+    const t = sessions.get(req.query.sessionId ?? "");
+    if (!t) return res.status(404).end();
+    await t.handlePostMessage(req, res);
+  });
+
+  // SPA fallback: servir index.html para todas las rutas no encontradas
+  app.get("*", (req: any, res: any) => {
+    res.sendFile(path.join(webPath, "index.html"));
+  });
+
+  app.listen(PORT, () => console.log(`CLAUDIO escuchando en :${PORT}`));
 
 } else {
   // ── Modo local: stdio para Claude Code ──────────────────────────────────
