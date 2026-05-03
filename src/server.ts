@@ -52,6 +52,14 @@ function buildServer() {
   return s;
 }
 
+function logLocalDebug(message: string): void {
+  try {
+    fs.writeFileSync(path.resolve(process.cwd(), "mcp-debug.log"), message, { flag: "a" });
+  } catch {
+    // No romper el arranque por logging auxiliar.
+  }
+}
+
 function assertStrongToken(token: string): void {
   if (token.length < 32) {
     throw new Error("CLAUDIO_TOKEN must be at least 32 characters in HTTP mode.");
@@ -66,10 +74,7 @@ function safeTokenEquals(expectedToken: string, candidate: string | null | undef
   return timingSafeEqual(expected, received);
 }
 
-const PORT = process.env.PORT ? parseInt(process.env.PORT) : null;
-
-if (PORT) {
-  // ── Modo remoto: HTTP (Streamable) + SSE legacy ────────────────────────
+function createRemoteApp() {
   const TOKEN = process.env.CLAUDIO_TOKEN;
   if (TOKEN) assertStrongToken(TOKEN);
   const sessions = new Map<string, SSEServerTransport>();
@@ -98,7 +103,7 @@ if (PORT) {
   }
 
   const app = express();
-  const webPath = path.resolve(ROOT, "web", "dist", "public");
+  const webPath = path.resolve(ROOT, "dist", "public");
 
   // Middleware para parsear JSON en requests POST
   app.use(express.json({ limit: `${MAX_HTTP_BODY_BYTES}b` }));
@@ -156,24 +161,37 @@ if (PORT) {
     res.sendFile(path.join(webPath, "index.html"));
   });
 
-  app.listen(PORT, () => console.log(`CLAUDIO escuchando en :${PORT}`));
+  return app;
+}
+
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const SHOULD_RUN_HTTP = Boolean(process.env.PORT || process.env.VERCEL || process.env.NODE_ENV === "production");
+const remoteApp = createRemoteApp();
+
+export default remoteApp;
+
+if (SHOULD_RUN_HTTP) {
+  // ── Modo remoto: HTTP (Express) para Railway/Vercel ────────────────────
+  if (!process.env.VERCEL) {
+    remoteApp.listen(PORT, () => console.log(`CLAUDIO escuchando en :${PORT}`));
+  }
 
 } else {
   // ── Modo local: stdio para Claude Code ──────────────────────────────────
   try {
-    fs.writeFileSync(path.resolve(process.cwd(), "mcp-debug.log"), `[${new Date().toISOString()}] Arrancando servidor en stdio mode...\n`, { flag: 'a' });
+    logLocalDebug(`[${new Date().toISOString()}] Arrancando servidor en stdio mode...\n`);
     
     // syncPull();
     // printBriefingToStderr(); 
 
     const server = buildServer();
-    fs.writeFileSync(path.resolve(process.cwd(), "mcp-debug.log"), `[${new Date().toISOString()}] buildServer completado.\n`, { flag: 'a' });
+    logLocalDebug(`[${new Date().toISOString()}] buildServer completado.\n`);
 
     function shutdown() {
       try {
         syncPush();
       } catch (e) {
-        fs.writeFileSync(path.resolve(process.cwd(), "mcp-debug.log"), `[${new Date().toISOString()}] Error en shutdown syncPush: ${e}\n`, { flag: 'a' });
+        logLocalDebug(`[${new Date().toISOString()}] Error en shutdown syncPush: ${e}\n`);
       }
       process.exit(0);
     }
@@ -181,13 +199,13 @@ if (PORT) {
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
 
-    fs.writeFileSync(path.resolve(process.cwd(), "mcp-debug.log"), `[${new Date().toISOString()}] Conectando StdioServerTransport...\n`, { flag: 'a' });
+    logLocalDebug(`[${new Date().toISOString()}] Conectando StdioServerTransport...\n`);
     await server.connect(new StdioServerTransport());
-    fs.writeFileSync(path.resolve(process.cwd(), "mcp-debug.log"), `[${new Date().toISOString()}] Transporte conectado. Escuchando a Codex.\n`, { flag: 'a' });
+    logLocalDebug(`[${new Date().toISOString()}] Transporte conectado. Escuchando a Codex.\n`);
     
     setInterval(() => {}, 1000);
   } catch (error) {
-    fs.writeFileSync(path.resolve(process.cwd(), "mcp-debug.log"), `[${new Date().toISOString()}] ERROR FATAL CAPTURADO: ${error}\n${(error as Error).stack}\n`, { flag: 'a' });
+    logLocalDebug(`[${new Date().toISOString()}] ERROR FATAL CAPTURADO: ${error}\n${(error as Error).stack}\n`);
     process.exit(1);
   }
 }
