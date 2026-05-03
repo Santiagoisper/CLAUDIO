@@ -100,16 +100,17 @@ if (PORT) {
   const app = express();
   const webPath = path.resolve(ROOT, "web", "dist", "public");
 
-  // Servir archivos estáticos del frontend
-  app.use(express.static(webPath));
+  // Middleware para parsear JSON en requests POST
+  app.use(express.json({ limit: `${MAX_HTTP_BODY_BYTES}b` }));
 
-  // Health check
+  // Health check (sin autenticación)
   app.get("/health", (req, res) => {
     res.json({ ok: true });
   });
 
-  // Rutas de la API MCP
+  // Rutas de la API MCP - requieren autenticación
   app.use(async (req: any, res: any, next: any) => {
+    // Solo proteger rutas MCP, permitir acceso al frontend sin token
     if (req.path.startsWith("/api/mcp") || req.path === "/mcp" || req.path === "/sse" || req.path === "/messages") {
       if (!authed(req)) {
         res.status(401).json({ error: "Unauthorized" });
@@ -118,6 +119,9 @@ if (PORT) {
     }
     next();
   });
+
+  // Servir archivos estáticos del frontend (sin autenticación)
+  app.use(express.static(webPath));
 
   app.post("/mcp", async (req: any, res: any) => {
     const sessionId = getMcpSessionId(req);
