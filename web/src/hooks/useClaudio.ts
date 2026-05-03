@@ -13,8 +13,19 @@ export interface ClaudioResponse<T> {
   data?: T;
 }
 
-const API_URL = import.meta.env.VITE_CLAUDIO_API_URL || "http://localhost:3737";
-const API_TOKEN = import.meta.env.VITE_CLAUDIO_TOKEN || "";
+// Usar la URL del servidor en la misma instancia
+const getApiUrl = () => {
+  if (typeof window === 'undefined') return 'http://localhost:3000';
+  return window.location.origin;
+};
+
+const getApiToken = () => {
+  if (typeof window === 'undefined') return '';
+  return localStorage.getItem('claudio_token') || import.meta.env.VITE_CLAUDIO_TOKEN || '';
+};
+
+const API_URL = getApiUrl();
+const API_TOKEN = getApiToken();
 
 export function useClaudio() {
   const [memories, setMemories] = useState<Memory[]>([]);

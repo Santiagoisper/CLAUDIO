@@ -16,7 +16,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { Menu, X, Plus, Search, Brain, Settings, LogOut, Loader2, AlertCircle } from "lucide-react";
+import { Menu, X, Plus, Search, Brain, Settings, LogOut, Loader2, AlertCircle, Lock } from "lucide-react";
 import { useClaudio, type Memory } from "@/hooks/useClaudio";
 import { useClaudioConfig } from "@/contexts/ClaudioContext";
 import { toast } from "sonner";
@@ -30,9 +30,19 @@ export default function Home() {
   const [newMemoryKind, setNewMemoryKind] = useState("nota");
   const [newMemoryContent, setNewMemoryContent] = useState("");
   const [showNewForm, setShowNewForm] = useState(false);
+  const [tokenInput, setTokenInput] = useState("");
+  const [showTokenForm, setShowTokenForm] = useState(false);
 
   const { memories, loading, error, isConnected, fetchMemories, searchMemories, createMemory, updateMemory, deleteMemory } = useClaudio();
   const { config } = useClaudioConfig();
+
+  // Verificar si hay token guardado
+  useEffect(() => {
+    const savedToken = localStorage.getItem('claudio_token');
+    if (!savedToken) {
+      setShowTokenForm(true);
+    }
+  }, []);
 
   // Cargar memorias al montar el componente
   useEffect(() => {
@@ -47,6 +57,17 @@ export default function Home() {
       setSelectedMemory(memories[0]);
     }
   }, [memories, selectedMemory]);
+
+  const handleSetToken = () => {
+    if (tokenInput.trim()) {
+      localStorage.setItem('claudio_token', tokenInput);
+      setShowTokenForm(false);
+      setTokenInput("");
+      window.location.reload();
+    } else {
+      toast.error("Ingresa un token válido");
+    }
+  };
 
   const handleSearch = (query: string) => {
     setSearchQuery(query);
@@ -107,11 +128,59 @@ export default function Home() {
     }
   };
 
+  const handleLogout = () => {
+    localStorage.removeItem('claudio_token');
+    setShowTokenForm(true);
+    toast.success("Sesión cerrada");
+  };
+
   const filteredMemories = memories.filter(
     (m) =>
       m.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
       m.kind.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // Pantalla de login
+  if (showTokenForm) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-background">
+        <Card className="w-full max-w-md p-8 space-y-6">
+          <div className="text-center space-y-2">
+            <div className="flex justify-center mb-4">
+              <Lock className="w-12 h-12 text-primary" />
+            </div>
+            <h1 className="text-2xl font-bold" style={{ fontFamily: "Merriweather" }}>
+              CLAUDIO
+            </h1>
+            <p className="text-sm text-muted-foreground">Ingresa tu token de autenticación</p>
+          </div>
+
+          <div className="space-y-4">
+            <Input
+              type="password"
+              placeholder="Token de CLAUDIO"
+              value={tokenInput}
+              onChange={(e) => setTokenInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSetToken()}
+              className="bg-secondary border-border"
+              autoFocus
+            />
+            <Button
+              onClick={handleSetToken}
+              disabled={!tokenInput.trim()}
+              className="w-full bg-primary hover:bg-primary/90"
+            >
+              Conectar
+            </Button>
+          </div>
+
+          <p className="text-xs text-muted-foreground text-center">
+            El token se guardará localmente en tu navegador
+          </p>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-background text-foreground">
@@ -131,7 +200,13 @@ export default function Home() {
         <nav className="flex-1 p-4 space-y-2">
           <NavItem icon={Brain} label="Memoria" active />
           <NavItem icon={Settings} label="Configuración" />
-          <NavItem icon={LogOut} label="Desconectar" />
+          <button
+            onClick={handleLogout}
+            className="w-full flex items-center gap-3 px-3 py-2 rounded hover:bg-secondary transition-colors text-foreground"
+          >
+            <LogOut className="w-4 h-4" />
+            <span className="text-sm">Desconectar</span>
+          </button>
         </nav>
 
         <div className="p-4 border-t border-border text-xs text-muted-foreground space-y-2">
@@ -286,113 +361,87 @@ export default function Home() {
           <div className="flex-1 overflow-y-auto">
             {selectedMemory ? (
               <div className="p-8 max-w-4xl">
-                <div className="mb-6">
-                  <div className="text-xs font-mono text-muted-foreground mb-2">
-                    TIPO: {selectedMemory.kind.toUpperCase()}
-                  </div>
-                  <h3
-                    className="text-3xl font-bold mb-2"
-                    style={{ fontFamily: "Merriweather" }}
-                  >
-                    {selectedMemory.content}
-                  </h3>
-                  <p className="text-sm text-muted-foreground">
-                    Creado:{" "}
-                    {new Date(selectedMemory.created_at).toLocaleString("es-AR")}
-                  </p>
-                </div>
-
-                <Tabs defaultValue="detalles" className="mt-8">
-                  <TabsList className="border-b border-border bg-transparent p-0">
-                    <TabsTrigger
-                      value="detalles"
-                      className="border-b-2 border-transparent data-[state=active]:border-primary rounded-none"
-                    >
-                      Detalles
-                    </TabsTrigger>
-                    <TabsTrigger
-                      value="editar"
-                      className="border-b-2 border-transparent data-[state=active]:border-primary rounded-none"
-                    >
-                      Editar
-                    </TabsTrigger>
-                  </TabsList>
-
-                  <TabsContent value="detalles" className="mt-6">
-                    <Card className="p-6 border border-border">
-                      <div className="space-y-4">
-                        <div>
-                          <label className="text-sm font-mono text-muted-foreground">
-                            Contenido
-                          </label>
-                          <p className="mt-2 text-base leading-relaxed">
-                            {selectedMemory.content}
-                          </p>
+                <div className="space-y-6">
+                  <div>
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <div className="text-xs font-mono text-muted-foreground mb-2">
+                          [{selectedMemory.kind}]
                         </div>
-                        <div className="pt-4 border-t border-border flex gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setEditingId(selectedMemory.id);
-                              setEditContent(selectedMemory.content);
-                            }}
-                          >
-                            Editar
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-destructive hover:bg-destructive/10"
-                            onClick={() => handleDeleteMemory(selectedMemory.id)}
-                          >
-                            Eliminar
-                          </Button>
-                        </div>
+                        <h3 className="text-2xl font-bold" style={{ fontFamily: "Merriweather" }}>
+                          {selectedMemory.content.split('\n')[0]}
+                        </h3>
+                        <p className="text-sm text-muted-foreground mt-2">
+                          {new Date(selectedMemory.created_at).toLocaleString("es-AR")}
+                        </p>
                       </div>
-                    </Card>
-                  </TabsContent>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setEditingId(selectedMemory.id);
+                            setEditContent(selectedMemory.content);
+                          }}
+                          disabled={editingId === selectedMemory.id}
+                        >
+                          Editar
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => handleDeleteMemory(selectedMemory.id)}
+                        >
+                          Eliminar
+                        </Button>
+                      </div>
+                    </div>
 
-                  <TabsContent value="editar" className="mt-6">
                     {editingId === selectedMemory.id ? (
-                      <Card className="p-6 border border-border space-y-4">
+                      <div className="space-y-3">
                         <Textarea
                           value={editContent}
                           onChange={(e) => setEditContent(e.target.value)}
-                          className="min-h-48 font-mono text-sm"
+                          className="min-h-64 bg-secondary border-border"
                         />
                         <div className="flex gap-2">
                           <Button
                             onClick={() => handleEditMemory(selectedMemory.id)}
                             disabled={loading}
-                            className="flex-1"
+                            className="bg-primary hover:bg-primary/90"
                           >
                             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Guardar"}
                           </Button>
                           <Button
                             variant="outline"
                             onClick={() => setEditingId(null)}
-                            className="flex-1"
                           >
                             Cancelar
                           </Button>
                         </div>
-                      </Card>
+                      </div>
                     ) : (
-                      <Card className="p-6 border border-border">
-                        <p className="text-sm text-muted-foreground">
-                          Haz click en "Editar" en la pestaña anterior para modificar este recuerdo.
+                      <div className="prose prose-sm max-w-none">
+                        <p className="whitespace-pre-wrap text-foreground font-mono text-sm leading-relaxed">
+                          {selectedMemory.content}
                         </p>
-                      </Card>
+                      </div>
                     )}
-                  </TabsContent>
-                </Tabs>
+                  </div>
+
+                  {selectedMemory.metadata_json && (
+                    <div className="p-4 bg-secondary rounded border border-border">
+                      <p className="text-xs font-mono text-muted-foreground mb-2">Metadata:</p>
+                      <pre className="text-xs font-mono overflow-auto">
+                        {JSON.stringify(JSON.parse(selectedMemory.metadata_json), null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                </div>
               </div>
             ) : (
               <div className="flex items-center justify-center h-full">
-                <p className="text-muted-foreground">
-                  {isConnected ? "Selecciona un recuerdo" : "No conectado"}
-                </p>
+                <p className="text-muted-foreground">Selecciona un recuerdo para ver detalles</p>
               </div>
             )}
           </div>
@@ -402,25 +451,17 @@ export default function Home() {
   );
 }
 
-function NavItem({
-  icon: Icon,
-  label,
-  active = false,
-}: {
-  icon: React.ComponentType<{ className: string }>;
-  label: string;
-  active?: boolean;
-}) {
+function NavItem({ icon: Icon, label, active = false }: { icon: any; label: string; active?: boolean }) {
   return (
     <button
-      className={`w-full flex items-center gap-3 px-4 py-2 rounded transition-colors ${
+      className={`w-full flex items-center gap-3 px-3 py-2 rounded transition-colors ${
         active
           ? "bg-primary text-primary-foreground"
           : "text-foreground hover:bg-secondary"
       }`}
     >
-      <Icon className="w-5 h-5" />
-      <span className="text-sm font-medium">{label}</span>
+      <Icon className="w-4 h-4" />
+      <span className="text-sm">{label}</span>
     </button>
   );
 }
