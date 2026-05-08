@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
+import { useClaudioConfig } from "@/contexts/ClaudioContext";
 
 export interface Memory {
   id: string;
@@ -13,39 +14,44 @@ export interface ClaudioResponse<T> {
   data?: T;
 }
 
-// Usar la URL del servidor en la misma instancia
-const getApiUrl = () => {
-  if (typeof window === 'undefined') return 'http://localhost:3000';
-  return window.location.origin;
-};
+function normalizeBaseUrl(url: string): string {
+  const t = url.trim();
+  return t.endsWith("/") ? t.slice(0, -1) : t;
+}
 
-const getApiToken = () => {
-  if (typeof window === 'undefined') return '';
-  return localStorage.getItem('claudio_token') || import.meta.env.VITE_CLAUDIO_TOKEN || '';
-};
-
-const API_URL = getApiUrl();
-const API_TOKEN = getApiToken();
+function readAuthToken(configToken: string): string {
+  if (typeof window === "undefined") return "";
+  return (
+    localStorage.getItem("claudio_token") ||
+    configToken ||
+    import.meta.env.VITE_CLAUDIO_TOKEN ||
+    ""
+  );
+}
 
 export function useClaudio() {
+  const { config } = useClaudioConfig();
+  const apiUrl = normalizeBaseUrl(
+    config.apiUrl || import.meta.env.VITE_CLAUDIO_API_URL || "http://localhost:3737",
+  );
+
   const [memories, setMemories] = useState<Memory[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
 
-  // Verificar conexión al servidor
-  useEffect(() => {
-    checkConnection();
-  }, []);
-
   const checkConnection = useCallback(async () => {
     try {
-      const response = await fetch(`${API_URL}/health`);
+      const response = await fetch(`${apiUrl}/health`);
       setIsConnected(response.ok);
     } catch {
       setIsConnected(false);
     }
-  }, []);
+  }, [apiUrl]);
+
+  useEffect(() => {
+    checkConnection();
+  }, [checkConnection]);
 
   const callMcpTool = useCallback(
     async <T,>(toolName: string, params: Record<string, unknown>): Promise<T | null> => {
@@ -53,11 +59,13 @@ export function useClaudio() {
         setLoading(true);
         setError(null);
 
-        const response = await fetch(`${API_URL}/mcp`, {
+        const token = readAuthToken(config.token);
+
+        const response = await fetch(`${apiUrl}/mcp`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            ...(API_TOKEN && { Authorization: `Bearer ${API_TOKEN}` }),
+            ...(token && { Authorization: `Bearer ${token}` }),
             "mcp-session-id": `session-${Date.now()}`,
           },
           body: JSON.stringify({
@@ -85,7 +93,7 @@ export function useClaudio() {
         setLoading(false);
       }
     },
-    []
+    [apiUrl, config.token],
   );
 
   const fetchMemories = useCallback(

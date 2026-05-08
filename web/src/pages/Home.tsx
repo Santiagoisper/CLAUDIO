@@ -32,9 +32,17 @@ export default function Home() {
   const [showNewForm, setShowNewForm] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
   const [showTokenForm, setShowTokenForm] = useState(false);
+  const [section, setSection] = useState<"memoria" | "configuracion">("memoria");
+  const [settingsUrl, setSettingsUrl] = useState("");
+  const [settingsToken, setSettingsToken] = useState("");
 
-  const { memories, loading, error, isConnected, fetchMemories, searchMemories, createMemory, updateMemory, deleteMemory } = useClaudio();
-  const { config } = useClaudioConfig();
+  const { memories, loading, error, isConnected, fetchMemories, searchMemories, createMemory, updateMemory, deleteMemory, checkConnection } = useClaudio();
+  const { config, saveConfig } = useClaudioConfig();
+
+  useEffect(() => {
+    setSettingsUrl(config.apiUrl);
+    setSettingsToken(localStorage.getItem("claudio_token") || config.token || "");
+  }, [config.apiUrl, config.token, section]);
 
   // Verificar si hay token guardado
   useEffect(() => {
@@ -60,13 +68,28 @@ export default function Home() {
 
   const handleSetToken = () => {
     if (tokenInput.trim()) {
-      localStorage.setItem('claudio_token', tokenInput);
+      localStorage.setItem('claudio_token', tokenInput.trim());
+      saveConfig(config.apiUrl, tokenInput.trim());
       setShowTokenForm(false);
       setTokenInput("");
       window.location.reload();
     } else {
       toast.error("Ingresa un token válido");
     }
+  };
+
+  const handleSaveSettings = () => {
+    const url = settingsUrl.trim();
+    const tok = settingsToken.trim();
+    if (!url) {
+      toast.error("La URL del API no puede estar vacía");
+      return;
+    }
+    saveConfig(url.replace(/\/$/, ""), tok);
+    if (tok) localStorage.setItem("claudio_token", tok);
+    else localStorage.removeItem("claudio_token");
+    toast.success("Configuración guardada");
+    void checkConnection();
   };
 
   const handleSearch = (query: string) => {
@@ -198,8 +221,18 @@ export default function Home() {
         </div>
 
         <nav className="flex-1 p-4 space-y-2">
-          <NavItem icon={Brain} label="Memoria" active />
-          <NavItem icon={Settings} label="Configuración" />
+          <NavItem
+            icon={Brain}
+            label="Memoria"
+            active={section === "memoria"}
+            onClick={() => setSection("memoria")}
+          />
+          <NavItem
+            icon={Settings}
+            label="Configuración"
+            active={section === "configuracion"}
+            onClick={() => setSection("configuracion")}
+          />
           <button
             onClick={handleLogout}
             className="w-full flex items-center gap-3 px-3 py-2 rounded hover:bg-secondary transition-colors text-foreground"
@@ -243,21 +276,23 @@ export default function Home() {
               )}
             </button>
             <h2 className="text-xl font-semibold" style={{ fontFamily: "Merriweather" }}>
-              Memoria
+              {section === "memoria" ? "Memoria" : "Configuración"}
             </h2>
           </div>
-          <Button
-            onClick={() => setShowNewForm(!showNewForm)}
-            className="gap-2 bg-primary hover:bg-primary/90"
-            disabled={!isConnected}
-          >
-            <Plus className="w-4 h-4" />
-            Nuevo Recuerdo
-          </Button>
+          {section === "memoria" && (
+            <Button
+              onClick={() => setShowNewForm(!showNewForm)}
+              className="gap-2 bg-primary hover:bg-primary/90"
+              disabled={!isConnected}
+            >
+              <Plus className="w-4 h-4" />
+              Nuevo Recuerdo
+            </Button>
+          )}
         </header>
 
         {/* Error Alert */}
-        {error && !isConnected && (
+        {error && !isConnected && section === "memoria" && (
           <div className="bg-destructive/10 border-b border-destructive/30 px-6 py-3 flex items-gap-2">
             <AlertCircle className="w-5 h-5 text-destructive mr-2 flex-shrink-0" />
             <p className="text-sm text-destructive">
@@ -267,6 +302,55 @@ export default function Home() {
         )}
 
         {/* Content Area */}
+        {section === "configuracion" ? (
+          <div className="flex-1 overflow-y-auto p-8 max-w-xl">
+            <Card className="p-6 space-y-4">
+              <p className="text-sm text-muted-foreground">
+                URL base del servidor MCP (mismo host y puerto donde responde <span className="font-mono">/health</span> y{" "}
+                <span className="font-mono">/mcp</span>). En local suele ser <span className="font-mono">http://localhost:3737</span> si el MCP corre ahí y Vite en 3000.
+              </p>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">URL del API</label>
+                <Input
+                  value={settingsUrl}
+                  onChange={(e) => setSettingsUrl(e.target.value)}
+                  className="bg-secondary border-border font-mono text-sm"
+                  placeholder="http://localhost:3737"
+                  autoComplete="off"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Token (CLAUDIO_TOKEN)</label>
+                <Input
+                  type="password"
+                  value={settingsToken}
+                  onChange={(e) => setSettingsToken(e.target.value)}
+                  className="bg-secondary border-border font-mono text-sm"
+                  placeholder="Token Bearer"
+                  autoComplete="off"
+                />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <Button type="button" onClick={handleSaveSettings} className="bg-primary">
+                  Guardar
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setSettingsUrl(config.apiUrl);
+                    setSettingsToken(localStorage.getItem("claudio_token") || config.token || "");
+                  }}
+                >
+                  Revertir
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Estado: {isConnected ? "conectado al servidor" : "sin conexión"} — probá Guardar y revisá que la URL sea correcta.
+              </p>
+            </Card>
+          </div>
+        ) : (
         <div className="flex-1 flex overflow-hidden">
           {/* List Panel */}
           <div className="w-80 border-r border-border bg-card overflow-y-auto flex flex-col">
@@ -446,14 +530,27 @@ export default function Home() {
             )}
           </div>
         </div>
+        )}
       </main>
     </div>
   );
 }
 
-function NavItem({ icon: Icon, label, active = false }: { icon: any; label: string; active?: boolean }) {
+function NavItem({
+  icon: Icon,
+  label,
+  active = false,
+  onClick,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  active?: boolean;
+  onClick?: () => void;
+}) {
   return (
     <button
+      type="button"
+      onClick={onClick}
       className={`w-full flex items-center gap-3 px-3 py-2 rounded transition-colors ${
         active
           ? "bg-primary text-primary-foreground"

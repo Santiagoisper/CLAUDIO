@@ -105,6 +105,27 @@ function createRemoteApp() {
   const app = express();
   const webPath = path.resolve(ROOT, "dist", "public");
 
+  // CORS: el panel Vite suele correr en otro puerto que el MCP; sin esto el browser bloquea /mcp (preflight).
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (typeof origin === "string" && origin.length > 0) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+    } else {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+    }
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, mcp-session-id, Mcp-Session-Id, Accept",
+    );
+    if (req.method === "OPTIONS") {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+
   // Middleware para parsear JSON en requests POST
   app.use(express.json({ limit: `${MAX_HTTP_BODY_BYTES}b` }));
 

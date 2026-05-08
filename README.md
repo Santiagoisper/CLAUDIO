@@ -18,6 +18,25 @@ En este modo CLAUDIO corre localmente y no expone HTTP. Para apagarlo, corta el 
 
 Si necesitás exponer el MCP por HTTP/SSE, definí `PORT` y un `CLAUDIO_TOKEN` fuerte en el entorno antes de iniciar el servidor. Sin `PORT`, el servidor queda en modo local.
 
+Arranque único (sin watch), útil para scripts o producción local:
+
+```bash
+npm run mcp
+```
+
+### Panel web + MCP en la misma máquina
+
+Para `npm run dev` (Vite + servidor), el MCP tiene que estar en **modo HTTP**. Vite usa el puerto **3000** (`vite.config.ts`); el MCP no puede usar el mismo puerto, así que en `.env` definí por ejemplo `PORT=3737` y `VITE_CLAUDIO_API_URL=http://localhost:3737`, más `VITE_CLAUDIO_TOKEN` igual que `CLAUDIO_TOKEN`. Copiá el resto desde `.env.example`. Luego:
+
+```bash
+npm run dev
+```
+
+### Herramientas CLI
+
+- **Google OAuth (Calendar/Gmail):** `node tools/get-google-token.mjs` — interactivo; no guarda secretos en el repo.
+- **Memoria remota (`claudio_remember`):** `tsx tools/remember.ts <kind> <content>` — requiere `CLAUDIO_TOKEN` en el entorno; opcional `CLAUDIO_REMOTE_URL` si no querés el default del script (ver `.env.example`).
+
 Controles recomendados:
 
 - Mantener `CLAUDIO_ENABLE_SHELL=false` salvo que realmente quieras habilitar comandos del sistema.
