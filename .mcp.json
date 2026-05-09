@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "claudio": {
+      "command": "npm",
+      "args": ["run", "dev:mcp"],
+      "cwd": "C:\\Users\\Santiago\\source\\repos\\CLAUDIO"
+    },
+    "agentmemory": {
+      "command": "npx",
+      "args": ["-y", "@agentmemory/mcp"]
+    }
+  }
+}
