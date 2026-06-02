@@ -77,7 +77,18 @@ export function registerMemoryTools(server: McpServer) {
       if (process.env.OPENAI_API_KEY) {
         maybeStoreEmbedding(id, content).catch(console.error);
       }
-      return { content: [{ type: "text" as const, text: `Recuerdo guardado. ID: ${id}` }] };
+      const row = db
+        .prepare(`SELECT id, kind, content, created_at FROM memories WHERE id = ?`)
+        .get(id) as unknown as MemoryRow;
+      return {
+        content: [{ type: "text" as const, text: `Recuerdo guardado. ID: ${id}` }],
+        structuredContent: {
+          id: row.id,
+          kind: row.kind,
+          content: row.content,
+          created_at: String(row.created_at),
+        },
+      };
     }
   );
 
@@ -128,10 +139,20 @@ export function registerMemoryTools(server: McpServer) {
         }
       }
       if (rows.length === 0) {
-        return { content: [{ type: "text" as const, text: "No se encontraron recuerdos." }] };
+        return {
+          content: [{ type: "text" as const, text: "No se encontraron recuerdos." }],
+          structuredContent: { memories: [] as MemoryRow[] },
+        };
       }
       const text = rows.map((row) => `[${row.kind}] (${row.id.slice(0, 8)})\n${row.content}`).join("\n\n---\n\n");
-      return { content: [{ type: "text" as const, text }] };
+      const memories = rows.map((row) => ({
+        ...row,
+        created_at: String(row.created_at),
+      }));
+      return {
+        content: [{ type: "text" as const, text }],
+        structuredContent: { memories },
+      };
     }
   );
 
@@ -154,12 +175,22 @@ export function registerMemoryTools(server: McpServer) {
         `).all() as unknown as MemoryRow[];
       }
       if (rows.length === 0) {
-        return { content: [{ type: "text" as const, text: "No hay recuerdos." }] };
+        return {
+          content: [{ type: "text" as const, text: "No hay recuerdos." }],
+          structuredContent: { memories: [] as MemoryRow[] },
+        };
       }
       const text = rows
         .map((row) => `[${row.kind}] (${row.id.slice(0, 8)}) - ${truncate(row.content, 100)}`)
         .join("\n");
-      return { content: [{ type: "text" as const, text: `${rows.length} recuerdos:\n\n${text}` }] };
+      const memories = rows.map((row) => ({
+        ...row,
+        created_at: String(row.created_at),
+      }));
+      return {
+        content: [{ type: "text" as const, text: `${rows.length} recuerdos:\n\n${text}` }],
+        structuredContent: { memories },
+      };
     }
   );
 

@@ -19,6 +19,18 @@ function normalizeBaseUrl(url: string): string {
   return t.endsWith("/") ? t.slice(0, -1) : t;
 }
 
+/** Base del API: env Vite > mismo origen en prod > localhost dev (Vite en :3000). */
+function defaultApiBase(): string {
+  const env = import.meta.env.VITE_CLAUDIO_API_URL;
+  if (typeof env === "string" && env.trim() !== "") {
+    return env.trim();
+  }
+  if (import.meta.env.PROD && typeof window !== "undefined") {
+    return window.location.origin;
+  }
+  return "http://localhost:3737";
+}
+
 function readAuthToken(configToken: string): string {
   if (typeof window === "undefined") return "";
   return (
@@ -31,9 +43,7 @@ function readAuthToken(configToken: string): string {
 
 export function useClaudio() {
   const { config } = useClaudioConfig();
-  const apiUrl = normalizeBaseUrl(
-    config.apiUrl || import.meta.env.VITE_CLAUDIO_API_URL || "http://localhost:3737",
-  );
+  const apiUrl = normalizeBaseUrl(config.apiUrl || defaultApiBase());
 
   const [memories, setMemories] = useState<Memory[]>([]);
   const [loading, setLoading] = useState(false);
@@ -65,12 +75,14 @@ export function useClaudio() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+            "mcp-protocol-version": "2025-03-26",
             ...(token && { Authorization: `Bearer ${token}` }),
-            "mcp-session-id": `session-${Date.now()}`,
           },
           body: JSON.stringify({
             jsonrpc: "2.0",
-            id: Math.random(),
+            // MCP: id debe ser string o entero (Math.random() es float → 400 Invalid JSON-RPC).
+            id: typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : Date.now(),
             method: "tools/call",
             params: {
               name: toolName,
@@ -83,8 +95,20 @@ export function useClaudio() {
           throw new Error(`HTTP ${response.status}`);
         }
 
-        const data = await response.json();
-        return data.result?.data || null;
+        const data = (await response.json()) as {
+          result?: { structuredContent?: unknown; data?: unknown; isError?: boolean };
+          error?: { message?: string };
+        };
+        if (data.error) {
+          throw new Error(data.error.message || "Error JSON-RPC");
+        }
+        const r = data.result;
+        if (r?.isError) {
+          throw new Error("La herramienta devolvió error");
+        }
+        // MCP usa `structuredContent`; el panel antiguo esperaba `data`.
+        const payload = (r?.structuredContent ?? r?.data) as T | null | undefined;
+        return payload ?? null;
       } catch (err) {
         const message = err instanceof Error ? err.message : "Error desconocido";
         setError(message);

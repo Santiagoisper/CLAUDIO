@@ -42,21 +42,58 @@ export async function ensureNeonSchema(): Promise<boolean> {
 
     await sql`
       CREATE TABLE IF NOT EXISTS memories (
-        id TEXT PRIMARY KEY,
+        id UUID PRIMARY KEY,
         profile_id TEXT,
         source_id TEXT,
         kind TEXT NOT NULL,
+        domain TEXT NOT NULL DEFAULT 'personal',
+        subdomain TEXT,
+        summary TEXT,
+        salience DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+        confidence DOUBLE PRECISION NOT NULL DEFAULT 1,
+        state TEXT NOT NULL DEFAULT 'active',
+        visibility TEXT NOT NULL DEFAULT 'assistant',
+        sensitivity TEXT NOT NULL DEFAULT 'medium',
+        cross_domain_policy TEXT NOT NULL DEFAULT 'forbidden',
+        occurred_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ,
+        embedding_status TEXT NOT NULL DEFAULT 'pending',
+        embedding_attempt_count INTEGER NOT NULL DEFAULT 0,
+        embedding_next_attempt_at TIMESTAMPTZ,
+        embedding_model TEXT,
+        embedding_dimensions INTEGER,
+        embedding_updated_at TIMESTAMPTZ,
+        embedding_error JSONB,
         content TEXT NOT NULL,
         metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `;
 
+    await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS domain TEXT NOT NULL DEFAULT 'personal'`;
+    await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS subdomain TEXT`;
+    await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS summary TEXT`;
+    await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS salience DOUBLE PRECISION NOT NULL DEFAULT 0.5`;
+    await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION NOT NULL DEFAULT 1`;
+    await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'active'`;
+    await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'assistant'`;
+    await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS sensitivity TEXT NOT NULL DEFAULT 'medium'`;
+    await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS cross_domain_policy TEXT NOT NULL DEFAULT 'forbidden'`;
+    await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS occurred_at TIMESTAMPTZ`;
+    await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`;
+    await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_status TEXT NOT NULL DEFAULT 'pending'`;
+    await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_attempt_count INTEGER NOT NULL DEFAULT 0`;
+    await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_next_attempt_at TIMESTAMPTZ`;
+    await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_model TEXT`;
+    await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_dimensions INTEGER`;
+    await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_updated_at TIMESTAMPTZ`;
+    await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_error JSONB`;
+
     await sql`
       CREATE TABLE IF NOT EXISTS relations (
         id TEXT PRIMARY KEY,
-        from_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
-        to_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+        from_id TEXT NOT NULL,
+        to_id TEXT NOT NULL,
         relation_type TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE(from_id, to_id, relation_type)

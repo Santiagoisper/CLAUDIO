@@ -69,7 +69,10 @@ export function registerBriefingTools(server: McpServer) {
     {},
     async () => {
       const text = buildBriefingText();
-      return { content: [{ type: "text" as const, text }] };
+      return {
+        content: [{ type: "text" as const, text }],
+        structuredContent: { briefing: text },
+      };
     }
   );
 }

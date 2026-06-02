@@ -26,6 +26,15 @@ function formatMemoryList(rows: MemoryRow[]): string {
   return rows.map((row) => `[${row.kind}] (${row.id.slice(0, 8)})\n${row.content}`).join("\n\n---\n\n");
 }
 
+function domainForMemory(kind: string, metadata: Record<string, unknown> | undefined): string {
+  const explicit = metadata?.domain;
+  if (typeof explicit === "string" && explicit.trim()) return explicit.trim();
+  if (kind.startsWith("bope")) return "bope";
+  if (kind.startsWith("github")) return "code";
+  if (kind.startsWith("biografia")) return "personal";
+  return "general";
+}
+
 export function registerNeonMemoryTools(server: McpServer) {
   server.tool(
     "claudio_remember",
@@ -43,11 +52,24 @@ export function registerNeonMemoryTools(server: McpServer) {
       }
 
       const id = randomUUID();
+      const safeMetadata = metadata ?? {};
       await sql`
-        INSERT INTO memories (id, profile_id, kind, content, metadata_json)
-        VALUES (${id}, 'santiago', ${kind}, ${content}, (${JSON.stringify(metadata ?? {})})::jsonb)
+        INSERT INTO memories (id, profile_id, kind, domain, content, metadata_json)
+        VALUES (${id}::uuid, 'santiago', ${kind}, ${domainForMemory(kind, safeMetadata)}, ${content}, (${JSON.stringify(safeMetadata)})::jsonb)
       `;
-      return { content: [{ type: "text" as const, text: `Recuerdo guardado. ID: ${id}` }] };
+      const rows = await sql<MemoryRow[]>`
+        SELECT id::text AS id, kind, content, created_at::text FROM memories WHERE id::text = ${id}
+      `;
+      const row = rows[0]!;
+      return {
+        content: [{ type: "text" as const, text: `Recuerdo guardado. ID: ${id}` }],
+        structuredContent: {
+          id: row.id,
+          kind: row.kind,
+          content: row.content,
+          created_at: row.created_at,
+        },
+      };
     }
   );
 
@@ -69,7 +91,7 @@ export function registerNeonMemoryTools(server: McpServer) {
       const pattern = `%${query}%`;
       const rows = kind
         ? await sql<MemoryRow[]>`
-            SELECT id, kind, content, created_at::text
+            SELECT id::text AS id, kind, content, created_at::text
             FROM memories
             WHERE (content ILIKE ${pattern} OR kind ILIKE ${pattern})
               AND kind = ${kind}
@@ -77,7 +99,7 @@ export function registerNeonMemoryTools(server: McpServer) {
             LIMIT ${limit}
           `
         : await sql<MemoryRow[]>`
-            SELECT id, kind, content, created_at::text
+            SELECT id::text AS id, kind, content, created_at::text
             FROM memories
             WHERE content ILIKE ${pattern} OR kind ILIKE ${pattern}
             ORDER BY created_at DESC
@@ -85,9 +107,15 @@ export function registerNeonMemoryTools(server: McpServer) {
           `;
 
       if (rows.length === 0) {
-        return { content: [{ type: "text" as const, text: "No se encontraron recuerdos." }] };
+        return {
+          content: [{ type: "text" as const, text: "No se encontraron recuerdos." }],
+          structuredContent: { memories: [] as MemoryRow[] },
+        };
       }
-      return { content: [{ type: "text" as const, text: formatMemoryList(rows) }] };
+      return {
+        content: [{ type: "text" as const, text: formatMemoryList(rows) }],
+        structuredContent: { memories: rows },
+      };
     }
   );
 
@@ -106,25 +134,31 @@ export function registerNeonMemoryTools(server: McpServer) {
 
       const rows = kind
         ? await sql<MemoryRow[]>`
-            SELECT id, kind, content, created_at::text
+            SELECT id::text AS id, kind, content, created_at::text
             FROM memories
             WHERE kind = ${kind}
             ORDER BY created_at DESC
           `
         : await sql<MemoryRow[]>`
-            SELECT id, kind, content, created_at::text
+            SELECT id::text AS id, kind, content, created_at::text
             FROM memories
             ORDER BY kind, created_at DESC
           `;
 
       if (rows.length === 0) {
-        return { content: [{ type: "text" as const, text: "No hay recuerdos." }] };
+        return {
+          content: [{ type: "text" as const, text: "No hay recuerdos." }],
+          structuredContent: { memories: [] as MemoryRow[] },
+        };
       }
 
       const text = rows
         .map((row) => `[${row.kind}] (${row.id.slice(0, 8)}) - ${truncate(row.content, 100)}`)
         .join("\n");
-      return { content: [{ type: "text" as const, text: `${rows.length} recuerdos:\n\n${text}` }] };
+      return {
+        content: [{ type: "text" as const, text: `${rows.length} recuerdos:\n\n${text}` }],
+        structuredContent: { memories: rows },
+      };
     }
   );
 
@@ -144,7 +178,7 @@ export function registerNeonMemoryTools(server: McpServer) {
 
       const rows = await sql<{ id: string }[]>`
         UPDATE memories SET content = ${content}
-        WHERE id = ${id}
+        WHERE id::text = ${id}
         RETURNING id
       `;
       if (rows.length === 0) {
@@ -169,7 +203,7 @@ export function registerNeonMemoryTools(server: McpServer) {
 
       const rows = await sql<{ id: string }[]>`
         DELETE FROM memories
-        WHERE id = ${id}
+        WHERE id::text = ${id}
         RETURNING id
       `;
       if (rows.length === 0) {
@@ -253,9 +287,9 @@ export function registerNeonMemoryTools(server: McpServer) {
       }
 
       const memories = await sql<MemoryRow[]>`
-        SELECT id, kind, content, created_at::text
+        SELECT id::text AS id, kind, content, created_at::text
         FROM memories
-        WHERE id = ${id}
+        WHERE id::text = ${id}
         LIMIT 1
       `;
       const memory = memories[0];
@@ -270,12 +304,12 @@ export function registerNeonMemoryTools(server: McpServer) {
         relation_type: string;
         direction: string;
       }>>`
-        SELECT m.id, m.kind, m.content, r.relation_type, 'out'::text as direction
-        FROM relations r JOIN memories m ON m.id = r.to_id
+        SELECT m.id::text AS id, m.kind, m.content, r.relation_type, 'out'::text as direction
+        FROM relations r JOIN memories m ON m.id::text = r.to_id
         WHERE r.from_id = ${id}
         UNION ALL
-        SELECT m.id, m.kind, m.content, r.relation_type, 'in'::text as direction
-        FROM relations r JOIN memories m ON m.id = r.from_id
+        SELECT m.id::text AS id, m.kind, m.content, r.relation_type, 'in'::text as direction
+        FROM relations r JOIN memories m ON m.id::text = r.from_id
         WHERE r.to_id = ${id}
       `;
 

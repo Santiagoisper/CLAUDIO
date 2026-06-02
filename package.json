@@ -4,7 +4,7 @@
   "description": "CLAUDIO — Asistente personal de Santiago",
   "type": "module",
   "scripts": {
-    "dev:mcp": "tsx watch --env-file=.env src/server.ts",
+    "dev:mcp": "tsx --env-file=.env src/server.ts",
     "mcp": "tsx --env-file=.env src/server.ts",
     "dev:web": "cd web && vite --config ../vite.config.ts",
     "dev": "concurrently \"npm run dev:mcp\" \"npm run dev:web\"",

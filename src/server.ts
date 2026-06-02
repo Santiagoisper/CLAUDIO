@@ -6,7 +6,7 @@ import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import express from "express";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import "dotenv/config";
@@ -95,8 +95,11 @@ function createRemoteApp() {
   }
 
   async function createStreamableSession(): Promise<StreamableHTTPServerTransport> {
+    // Modo stateless + JSON: cada POST /mcp es autocontenido (panel Vite no mantiene sesión MCP).
+    // Sin esto, un `mcp-session-id` inventado en el cliente produce 404 ("Unknown MCP session").
     const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
+      sessionIdGenerator: undefined,
+      enableJsonResponse: true,
     });
     await buildServer().connect(transport);
     return transport;
@@ -104,6 +107,8 @@ function createRemoteApp() {
 
   const app = express();
   const webPath = path.resolve(ROOT, "dist", "public");
+  const indexHtmlPath = path.join(webPath, "index.html");
+  const hasBuiltWeb = fs.existsSync(indexHtmlPath);
 
   // CORS: el panel Vite suele correr en otro puerto que el MCP; sin esto el browser bloquea /mcp (preflight).
   app.use((req, res, next) => {
@@ -117,7 +122,7 @@ function createRemoteApp() {
     res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS");
     res.setHeader(
       "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, mcp-session-id, Mcp-Session-Id, Accept",
+      "Content-Type, Authorization, mcp-session-id, Mcp-Session-Id, Accept, mcp-protocol-version, Mcp-Protocol-Version",
     );
     if (req.method === "OPTIONS") {
       res.status(204).end();
@@ -134,8 +139,10 @@ function createRemoteApp() {
     res.json({ ok: true });
   });
 
-  // Servir archivos estáticos del frontend PRIMERO (sin autenticación)
-  app.use(express.static(webPath));
+  // SPA empaquetada (solo tras `npm run build`). En dev el panel va por Vite en :3000.
+  if (hasBuiltWeb) {
+    app.use(express.static(webPath));
+  }
 
   // Rutas de la API MCP - requieren autenticación
   app.use(async (req: any, res: any, next: any) => {
@@ -150,6 +157,14 @@ function createRemoteApp() {
   });
 
   app.post("/mcp", async (req: any, res: any) => {
+    const body = req.body;
+    if (body == null || typeof body !== "object" || body.method == null) {
+      res.status(400).json({
+        error: "Cuerpo JSON-RPC inválido o vacío",
+        hint: 'POST con Content-Type: application/json. Ejemplo: {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"claudio_memories","arguments":{}}}',
+      });
+      return;
+    }
     const sessionId = getMcpSessionId(req);
     if (sessionId && !streamableSessions.has(sessionId)) {
       res.status(404).json({ error: "Unknown MCP session" });
@@ -158,7 +173,7 @@ function createRemoteApp() {
     const transport = sessionId
       ? streamableSessions.get(sessionId)!
       : await createStreamableSession();
-    await transport.handleRequest(req, res);
+    await transport.handleRequest(req, res, body);
     if (!sessionId && transport.sessionId) {
       streamableSessions.set(transport.sessionId, transport);
     }
@@ -177,9 +192,19 @@ function createRemoteApp() {
     await t.handlePostMessage(req, res);
   });
 
-  // SPA fallback: servir index.html para todas las rutas no encontradas
+  // Sin build del front: cualquier GET que no sea otra ruta definida responde ayuda (evita "404" al abrir :3737 en el navegador).
   app.get("*", (req: any, res: any) => {
-    res.sendFile(path.join(webPath, "index.html"));
+    if (hasBuiltWeb) {
+      res.sendFile(indexHtmlPath);
+      return;
+    }
+    res.status(200).type("json").send({
+      ok: true,
+      service: "claudio-mcp",
+      endpoints: { health: "GET /health", mcp: "POST /mcp" },
+      panel:
+        "En desarrollo el UI corre con Vite: http://localhost:3000 (npm run dev). Este puerto es solo API salvo que ejecutes npm run build.",
+    });
   });
 
   return app;
