@@ -11,7 +11,7 @@ echo Esperando 5 segundos para que agentmemory inicialice...
 timeout /t 5 /nobreak > nul
 
 echo [2/2] Iniciando CLAUDIO MCP en nueva ventana...
-start "CLAUDIO-MCP" cmd /k "cd /d C:\Users\Santiago\source\repos\CLAUDIO && npm run dev:mcp"
+start "CLAUDIO-MCP" cmd /k "cd /d C:\Users\Santiago\source\repos\Santiagoisper\CLAUDIO && npm run dev:mcp"
 
 echo.
 echo ============================================

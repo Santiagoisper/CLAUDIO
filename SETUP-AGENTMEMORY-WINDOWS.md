@@ -5,7 +5,7 @@ Guía para levantar el stack completo (CLAUDIO + agentmemory) en Windows.
 ## Requisitos previos
 
 - Node.js >= 20 instalado
-- Repo CLAUDIO clonado en `C:\Users\Santiago\source\repos\CLAUDIO`
+- Repo CLAUDIO clonado en `C:\Users\Santiago\source\repos\Santiagoisper\CLAUDIO`
 - Claude Code instalado
 
 ## Paso 1 — Configurar el .env de agentmemory
