@@ -10,6 +10,7 @@ import { timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import "dotenv/config";
+import { log } from "./logger.js";
 import { registerMemoryTools } from "./tools/memory.js";
 import { registerGithubTools } from "./tools/github.js";
 import { registerShellTools } from "./tools/shell.js";
@@ -149,6 +150,7 @@ function createRemoteApp() {
     // Solo proteger rutas MCP
     if (req.path.startsWith("/api/mcp") || req.path === "/mcp" || req.path === "/sse" || req.path === "/messages") {
       if (!authed(req)) {
+        log.warn("Unauthorized request", { path: req.path, ip: req.ip });
         res.status(401).json({ error: "Unauthorized" });
         return;
       }
@@ -219,25 +221,25 @@ export default remoteApp;
 if (SHOULD_RUN_HTTP) {
   // ── Modo remoto: HTTP (Express) para Railway/Vercel ────────────────────
   if (!process.env.VERCEL) {
-    remoteApp.listen(PORT, () => console.log(`CLAUDIO escuchando en :${PORT}`));
+    remoteApp.listen(PORT, () => log.info("CLAUDIO HTTP listo", { port: PORT }));
   }
 
 } else {
   // ── Modo local: stdio para Claude Code ──────────────────────────────────
   try {
-    logLocalDebug(`[${new Date().toISOString()}] Arrancando servidor en stdio mode...\n`);
-    
+    log.info("CLAUDIO iniciando en modo stdio");
+
     // syncPull();
-    // printBriefingToStderr(); 
+    // printBriefingToStderr();
 
     const server = buildServer();
-    logLocalDebug(`[${new Date().toISOString()}] buildServer completado.\n`);
+    log.info("buildServer completado");
 
     function shutdown() {
       try {
         syncPush();
       } catch (e) {
-        logLocalDebug(`[${new Date().toISOString()}] Error en shutdown syncPush: ${e}\n`);
+        log.error("Error en shutdown syncPush", { error: String(e) });
       }
       process.exit(0);
     }
@@ -245,13 +247,12 @@ if (SHOULD_RUN_HTTP) {
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
 
-    logLocalDebug(`[${new Date().toISOString()}] Conectando StdioServerTransport...\n`);
     await server.connect(new StdioServerTransport());
-    logLocalDebug(`[${new Date().toISOString()}] Transporte conectado. Escuchando a Codex.\n`);
-    
+    log.info("Transporte stdio conectado");
+
     setInterval(() => {}, 1000);
   } catch (error) {
-    logLocalDebug(`[${new Date().toISOString()}] ERROR FATAL CAPTURADO: ${error}\n${(error as Error).stack}\n`);
+    log.error("ERROR FATAL al iniciar", { error: String(error), stack: (error as Error).stack });
     process.exit(1);
   }
 }

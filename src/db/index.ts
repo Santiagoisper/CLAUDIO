@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import "dotenv/config";
+import { log } from "../logger.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BUNDLED = path.resolve(__dirname, "../../data/claudio.db");
@@ -47,11 +48,11 @@ export function getDb(): DatabaseSync {
       if (preferredDbPath === TMP_FALLBACK) {
         throw error;
       }
-      // Hosted free tiers sometimes deny custom volume paths; fall back to /tmp.
-      // console.warn(
-      //   `[CLAUDIO] Cannot use CLAUDIO_DB_PATH="${preferredDbPath}". Falling back to ${TMP_FALLBACK}.`,
-      //   error instanceof Error ? error.message : String(error),
-      // );
+      log.warn("No se pudo abrir DB en ruta preferida, usando fallback /tmp", {
+        preferred: preferredDbPath,
+        fallback: TMP_FALLBACK,
+        error: error instanceof Error ? error.message : String(error),
+      });
       _db = openDb(TMP_FALLBACK);
     }
   }

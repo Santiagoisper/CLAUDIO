@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { getDb, loadSqliteVec } from "../db/index.js";
 import { getNeonSql } from "../db/neon.js";
 import { registerNeonMemoryTools } from "./memory-neon.js";
+import { log } from "../logger.js";
 
 interface MemoryRow {
   id: string;
@@ -50,7 +51,7 @@ async function maybeStoreEmbedding(id: string, content: string): Promise<void> {
     db.prepare(`INSERT OR REPLACE INTO memories_vec (memory_id, embedding) VALUES (?, ?)`)
       .run(id, JSON.stringify(embedding));
   } catch (error) {
-    console.error("Error storing embedding:", error);
+    log.error("Error storing embedding", { error: String(error) });
   }
 }
 
@@ -131,7 +132,7 @@ export function registerMemoryTools(server: McpServer) {
           `).all(query, limit) as unknown as MemoryRow[];
         }
       } catch (error) {
-        console.error("FTS5 query failed, falling back to LIKE:", error);
+        log.warn("FTS5 query failed, falling back to LIKE", { error: String(error) });
         const pattern = `%${query}%`;
         if (kind) {
           rows = db.prepare(`
