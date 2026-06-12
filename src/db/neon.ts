@@ -88,6 +88,7 @@ export async function ensureNeonSchema(): Promise<boolean> {
     await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_dimensions INTEGER`;
     await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_updated_at TIMESTAMPTZ`;
     await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_error JSONB`;
+    await sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS relations (

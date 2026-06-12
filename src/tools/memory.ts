@@ -1,32 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { randomUUID } from "node:crypto";
-import { getDb, loadSqliteVec } from "../db/index.js";
+import { loadSqliteVec, getDb } from "../db/index.js";
 import { getNeonSql } from "../db/neon.js";
-import { registerNeonMemoryTools } from "./memory-neon.js";
-import { log } from "../logger.js";
-
-interface MemoryRow {
-  id: string;
-  kind: string;
-  content: string;
-  created_at: string;
-  expires_at?: string | null;
-}
-
-interface ProfileRow {
-  id: string;
-  display_name: string;
-  email: string;
-  created_at: string;
-}
+import { getNeonAdapter } from "./memory-neon.js";
+import { sqliteAdapter } from "./memory-sqlite.js";
+import type { MemoryAdapter, MemoryRow } from "./memory-adapter.js";
 
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}...` : text;
-}
-
-function formatErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 async function embed(text: string): Promise<number[]> {
@@ -43,24 +24,7 @@ async function embed(text: string): Promise<number[]> {
   return data.data[0].embedding;
 }
 
-async function maybeStoreEmbedding(id: string, content: string): Promise<void> {
-  if (!process.env.OPENAI_API_KEY) return;
-  try {
-    const embedding = await embed(content);
-    const db = getDb();
-    db.prepare(`INSERT OR REPLACE INTO memories_vec (memory_id, embedding) VALUES (?, ?)`)
-      .run(id, JSON.stringify(embedding));
-  } catch (error) {
-    log.error("Error storing embedding", { error: String(error) });
-  }
-}
-
-export function registerMemoryTools(server: McpServer) {
-  if (getNeonSql()) {
-    registerNeonMemoryTools(server);
-    return;
-  }
-
+function registerTools(server: McpServer, adapter: MemoryAdapter): void {
   server.tool(
     "claudio_remember",
     "Guarda un nuevo recuerdo o dato sobre Santiago",
@@ -71,31 +35,11 @@ export function registerMemoryTools(server: McpServer) {
       ttl_days: z.number().int().min(1).optional().describe("Dias hasta que el recuerdo expira. Sin valor = no expira."),
     },
     async ({ kind, content, metadata, ttl_days }) => {
-      const db = getDb();
-      const id = randomUUID();
-      const expires_at = ttl_days
-        ? new Date(Date.now() + ttl_days * 86_400_000).toISOString().replace("T", " ").slice(0, 19)
-        : null;
-      db.prepare(`
-        INSERT INTO memories (id, profile_id, kind, content, metadata_json, expires_at)
-        VALUES (?, 'santiago', ?, ?, ?, ?)
-      `).run(id, kind, content, JSON.stringify(metadata ?? {}), expires_at);
-      if (process.env.OPENAI_API_KEY) {
-        maybeStoreEmbedding(id, content).catch(console.error);
-      }
-      const row = db
-        .prepare(`SELECT id, kind, content, created_at, expires_at FROM memories WHERE id = ?`)
-        .get(id) as unknown as MemoryRow;
-      const expiryNote = expires_at ? ` Expira: ${expires_at}.` : "";
+      const row = await adapter.remember(kind, content, metadata, ttl_days);
+      const expiryNote = row.expires_at ? ` Expira: ${row.expires_at}.` : "";
       return {
-        content: [{ type: "text" as const, text: `Recuerdo guardado. ID: ${id}.${expiryNote}` }],
-        structuredContent: {
-          id: row.id,
-          kind: row.kind,
-          content: row.content,
-          created_at: String(row.created_at),
-          expires_at: row.expires_at ?? null,
-        },
+        content: [{ type: "text" as const, text: `Recuerdo guardado. ID: ${row.id}.${expiryNote}` }],
+        structuredContent: { ...row, created_at: String(row.created_at) },
       };
     }
   );
@@ -109,47 +53,7 @@ export function registerMemoryTools(server: McpServer) {
       limit: z.number().int().min(1).max(50).default(10).describe("Maximo de resultados"),
     },
     async ({ query, kind, limit }) => {
-      const db = getDb();
-      let rows: MemoryRow[];
-      try {
-        if (kind) {
-          rows = db.prepare(`
-            SELECT m.id, m.kind, m.content, m.created_at, m.expires_at
-            FROM memories_fts f
-            JOIN memories m ON m.rowid = f.rowid
-            WHERE memories_fts MATCH ? AND m.kind = ?
-              AND (m.expires_at IS NULL OR m.expires_at > datetime('now'))
-            ORDER BY rank LIMIT ?
-          `).all(query, kind, limit) as unknown as MemoryRow[];
-        } else {
-          rows = db.prepare(`
-            SELECT m.id, m.kind, m.content, m.created_at, m.expires_at
-            FROM memories_fts f
-            JOIN memories m ON m.rowid = f.rowid
-            WHERE memories_fts MATCH ?
-              AND (m.expires_at IS NULL OR m.expires_at > datetime('now'))
-            ORDER BY rank LIMIT ?
-          `).all(query, limit) as unknown as MemoryRow[];
-        }
-      } catch (error) {
-        log.warn("FTS5 query failed, falling back to LIKE", { error: String(error) });
-        const pattern = `%${query}%`;
-        if (kind) {
-          rows = db.prepare(`
-            SELECT id, kind, content, created_at, expires_at FROM memories
-            WHERE (content LIKE ? OR kind LIKE ?) AND kind = ?
-              AND (expires_at IS NULL OR expires_at > datetime('now'))
-            ORDER BY created_at DESC LIMIT ?
-          `).all(pattern, pattern, kind, limit) as unknown as MemoryRow[];
-        } else {
-          rows = db.prepare(`
-            SELECT id, kind, content, created_at, expires_at FROM memories
-            WHERE (content LIKE ? OR kind LIKE ?)
-              AND (expires_at IS NULL OR expires_at > datetime('now'))
-            ORDER BY created_at DESC LIMIT ?
-          `).all(pattern, pattern, limit) as unknown as MemoryRow[];
-        }
-      }
+      const rows = await adapter.recall(query, kind, limit);
       if (rows.length === 0) {
         return {
           content: [{ type: "text" as const, text: "No se encontraron recuerdos." }],
@@ -157,13 +61,9 @@ export function registerMemoryTools(server: McpServer) {
         };
       }
       const text = rows.map((row) => `[${row.kind}] (${row.id.slice(0, 8)})\n${row.content}`).join("\n\n---\n\n");
-      const memories = rows.map((row) => ({
-        ...row,
-        created_at: String(row.created_at),
-      }));
       return {
         content: [{ type: "text" as const, text }],
-        structuredContent: { memories },
+        structuredContent: { memories: rows.map((r) => ({ ...r, created_at: String(r.created_at) })) },
       };
     }
   );
@@ -175,21 +75,7 @@ export function registerMemoryTools(server: McpServer) {
       kind: z.string().optional().describe("Filtrar por categoria"),
     },
     async ({ kind }) => {
-      const db = getDb();
-      let rows: MemoryRow[];
-      if (kind) {
-        rows = db.prepare(`
-          SELECT id, kind, content, created_at, expires_at FROM memories
-          WHERE kind = ? AND (expires_at IS NULL OR expires_at > datetime('now'))
-          ORDER BY created_at DESC
-        `).all(kind) as unknown as MemoryRow[];
-      } else {
-        rows = db.prepare(`
-          SELECT id, kind, content, created_at, expires_at FROM memories
-          WHERE (expires_at IS NULL OR expires_at > datetime('now'))
-          ORDER BY kind, created_at DESC
-        `).all() as unknown as MemoryRow[];
-      }
+      const rows = await adapter.memories(kind);
       if (rows.length === 0) {
         return {
           content: [{ type: "text" as const, text: "No hay recuerdos." }],
@@ -199,13 +85,9 @@ export function registerMemoryTools(server: McpServer) {
       const text = rows
         .map((row) => `[${row.kind}] (${row.id.slice(0, 8)}) - ${truncate(row.content, 100)}`)
         .join("\n");
-      const memories = rows.map((row) => ({
-        ...row,
-        created_at: String(row.created_at),
-      }));
       return {
         content: [{ type: "text" as const, text: `${rows.length} recuerdos:\n\n${text}` }],
-        structuredContent: { memories },
+        structuredContent: { memories: rows.map((r) => ({ ...r, created_at: String(r.created_at) })) },
       };
     }
   );
@@ -218,9 +100,8 @@ export function registerMemoryTools(server: McpServer) {
       content: z.string().describe("Nuevo contenido"),
     },
     async ({ id, content }) => {
-      const db = getDb();
-      const result = db.prepare("UPDATE memories SET content = ? WHERE id = ?").run(content, id);
-      if (result.changes === 0) {
+      const updated = await adapter.update(id, content);
+      if (!updated) {
         return { content: [{ type: "text" as const, text: `No se encontro recuerdo con ID: ${id}` }] };
       }
       return { content: [{ type: "text" as const, text: `Recuerdo ${id.slice(0, 8)} actualizado.` }] };
@@ -234,9 +115,8 @@ export function registerMemoryTools(server: McpServer) {
       id: z.string().describe("ID del recuerdo a eliminar"),
     },
     async ({ id }) => {
-      const db = getDb();
-      const result = db.prepare("DELETE FROM memories WHERE id = ?").run(id);
-      if (result.changes === 0) {
+      const deleted = await adapter.forget(id);
+      if (!deleted) {
         return { content: [{ type: "text" as const, text: `No se encontro recuerdo con ID: ${id}` }] };
       }
       return { content: [{ type: "text" as const, text: `Recuerdo ${id.slice(0, 8)} eliminado.` }] };
@@ -252,22 +132,7 @@ export function registerMemoryTools(server: McpServer) {
       confirm: z.boolean().default(false).describe("Si es false (default), solo muestra los recuerdos que se eliminarian. Si es true, los elimina."),
     },
     async ({ query, kind, confirm }) => {
-      const db = getDb();
-      const pattern = `%${query}%`;
-      let rows: MemoryRow[];
-      if (kind) {
-        rows = db.prepare(`
-          SELECT id, kind, content, created_at FROM memories
-          WHERE (content LIKE ? OR kind LIKE ?) AND kind = ?
-          ORDER BY created_at DESC LIMIT 20
-        `).all(pattern, pattern, kind) as unknown as MemoryRow[];
-      } else {
-        rows = db.prepare(`
-          SELECT id, kind, content, created_at FROM memories
-          WHERE content LIKE ? OR kind LIKE ?
-          ORDER BY created_at DESC LIMIT 20
-        `).all(pattern, pattern) as unknown as MemoryRow[];
-      }
+      const { rows } = await adapter.forgetByQuery(query, kind);
       if (rows.length === 0) {
         return { content: [{ type: "text" as const, text: `No se encontraron recuerdos para: "${query}"` }] };
       }
@@ -280,13 +145,11 @@ export function registerMemoryTools(server: McpServer) {
           }],
         };
       }
-      const ids = rows.map((row) => row.id);
-      const placeholders = ids.map(() => "?").join(", ");
-      const result = db.prepare(`DELETE FROM memories WHERE id IN (${placeholders})`).run(...ids);
+      const deleted = await adapter.deleteByIds(rows.map((r) => r.id));
       return {
         content: [{
           type: "text" as const,
-          text: `${result.changes} recuerdo(s) eliminado(s) para la búsqueda: "${query}"`,
+          text: `${deleted} recuerdo(s) eliminado(s) para la búsqueda: "${query}"`,
         }],
       };
     }
@@ -300,23 +163,7 @@ export function registerMemoryTools(server: McpServer) {
       include_expired: z.boolean().default(false).describe("Incluir recuerdos ya expirados"),
     },
     async ({ days, include_expired }) => {
-      const db = getDb();
-      let rows: Array<MemoryRow & { expires_at: string }>;
-      if (include_expired) {
-        rows = db.prepare(`
-          SELECT id, kind, content, created_at, expires_at FROM memories
-          WHERE expires_at IS NOT NULL AND expires_at <= datetime('now', '+' || ? || ' days')
-          ORDER BY expires_at ASC LIMIT 30
-        `).all(days) as unknown as Array<MemoryRow & { expires_at: string }>;
-      } else {
-        rows = db.prepare(`
-          SELECT id, kind, content, created_at, expires_at FROM memories
-          WHERE expires_at IS NOT NULL
-            AND expires_at > datetime('now')
-            AND expires_at <= datetime('now', '+' || ? || ' days')
-          ORDER BY expires_at ASC LIMIT 30
-        `).all(days) as unknown as Array<MemoryRow & { expires_at: string }>;
-      }
+      const rows = await adapter.expireSoon(days, include_expired);
       if (rows.length === 0) {
         return {
           content: [{
@@ -341,15 +188,14 @@ export function registerMemoryTools(server: McpServer) {
     "Devuelve el perfil de Santiago",
     {},
     async () => {
-      const db = getDb();
-      const profile = db.prepare("SELECT * FROM profiles WHERE id = 'santiago'").get() as ProfileRow | undefined;
+      const profile = await adapter.profile();
       if (!profile) {
         return { content: [{ type: "text" as const, text: "Perfil no encontrado." }] };
       }
       return {
         content: [{
           type: "text" as const,
-          text: `Nombre: ${profile.display_name}\nEmail: ${profile.email}`,
+          text: `Nombre: ${profile.display_name}\nEmail: ${profile.email ?? ""}`.trim(),
         }],
       };
     }
@@ -364,13 +210,8 @@ export function registerMemoryTools(server: McpServer) {
       relation_type: z.string().describe("Tipo de relacion (ej: trabaja_en, conoce_a, parte_de, usa)"),
     },
     async ({ from_id, to_id, relation_type }) => {
-      const db = getDb();
-      const id = randomUUID();
       try {
-        db.prepare(`
-          INSERT OR IGNORE INTO relations (id, from_id, to_id, relation_type)
-          VALUES (?, ?, ?, ?)
-        `).run(id, from_id, to_id, relation_type);
+        await adapter.relate(from_id, to_id, relation_type);
         return {
           content: [{
             type: "text" as const,
@@ -381,7 +222,7 @@ export function registerMemoryTools(server: McpServer) {
         return {
           content: [{
             type: "text" as const,
-            text: `Error al crear relacion: ${formatErrorMessage(error)}`,
+            text: `Error al crear relacion: ${error instanceof Error ? error.message : String(error)}`,
           }],
         };
       }
@@ -395,19 +236,11 @@ export function registerMemoryTools(server: McpServer) {
       id: z.string().describe("ID del recuerdo"),
     },
     async ({ id }) => {
-      const db = getDb();
-      const memory = db.prepare("SELECT * FROM memories WHERE id = ?").get(id) as MemoryRow | undefined;
-      if (!memory) {
+      const result = await adapter.context(id);
+      if (!result) {
         return { content: [{ type: "text" as const, text: `No se encontro recuerdo con ID: ${id}` }] };
       }
-      const related = db.prepare(`
-        SELECT m.id, m.kind, m.content, r.relation_type, 'out' as direction
-        FROM relations r JOIN memories m ON m.id = r.to_id WHERE r.from_id = ?
-        UNION ALL
-        SELECT m.id, m.kind, m.content, r.relation_type, 'in' as direction
-        FROM relations r JOIN memories m ON m.id = r.from_id WHERE r.to_id = ?
-      `).all(id, id) as Array<{ id: string; kind: string; content: string; relation_type: string; direction: string }>;
-
+      const { memory, related } = result;
       let text = `[${memory.kind}] (${memory.id.slice(0, 8)})\n${memory.content}`;
       if (related.length > 0) {
         text += `\n\nRelaciones (${related.length}):\n`;
@@ -426,13 +259,7 @@ export function registerMemoryTools(server: McpServer) {
     "Devuelve estado actual de CLAUDIO: fecha/hora Argentina, cantidad de recuerdos por categoria, ultimo recuerdo registrado",
     {},
     async () => {
-      const db = getDb();
-      const counts = db.prepare(`
-        SELECT kind, COUNT(*) as total FROM memories GROUP BY kind ORDER BY total DESC
-      `).all() as Array<{ kind: string; total: number }>;
-      const last = db.prepare(`
-        SELECT content, kind, created_at FROM memories ORDER BY created_at DESC LIMIT 1
-      `).get() as { content: string; kind: string; created_at: string } | undefined;
+      const { counts, last } = await adapter.status();
       const total = counts.reduce((acc, row) => acc + row.total, 0);
       const now = new Date().toLocaleString("es-AR", {
         timeZone: "America/Argentina/Buenos_Aires",
@@ -461,7 +288,6 @@ export function registerMemoryTools(server: McpServer) {
       },
       async ({ query, limit }) => {
         const db = getDb();
-
         const vecAvailable = await loadSqliteVec(db);
         if (!vecAvailable) {
           return {
@@ -471,7 +297,6 @@ export function registerMemoryTools(server: McpServer) {
             }],
           };
         }
-
         let embedding: number[];
         try {
           embedding = await embed(query);
@@ -479,43 +304,38 @@ export function registerMemoryTools(server: McpServer) {
           return {
             content: [{
               type: "text" as const,
-              text: `Error generando embedding: ${formatErrorMessage(error)}`,
+              text: `Error generando embedding: ${error instanceof Error ? error.message : String(error)}`,
             }],
           };
         }
-
-        let rows: Array<{ id: string; kind: string; content: string; distance: number }>;
         try {
-          rows = db.prepare(`
+          const rows = db.prepare(`
             SELECT m.id, m.kind, m.content, v.distance
-            FROM memories_vec v
-            JOIN memories m ON m.id = v.memory_id
+            FROM memories_vec v JOIN memories m ON m.id = v.memory_id
             WHERE v.embedding MATCH ? AND k = ?
             ORDER BY v.distance
           `).all(JSON.stringify(embedding), limit) as Array<{ id: string; kind: string; content: string; distance: number }>;
+          if (rows.length === 0) {
+            return { content: [{ type: "text" as const, text: "No se encontraron recuerdos semanticamente similares." }] };
+          }
+          const text = rows
+            .map((row) => `[${row.kind}] (${row.id.slice(0, 8)}) - similitud: ${(1 - row.distance).toFixed(3)}\n${row.content}`)
+            .join("\n\n---\n\n");
+          return { content: [{ type: "text" as const, text }] };
         } catch (error) {
           return {
             content: [{
               type: "text" as const,
-              text: `Error en busqueda semantica: ${formatErrorMessage(error)}. Es posible que sqlite-vec no este correctamente instalado.`,
+              text: `Error en busqueda semantica: ${error instanceof Error ? error.message : String(error)}`,
             }],
           };
         }
-
-        if (rows.length === 0) {
-          return {
-            content: [{
-              type: "text" as const,
-              text: "No se encontraron recuerdos semanticamente similares.",
-            }],
-          };
-        }
-
-        const text = rows
-          .map((row) => `[${row.kind}] (${row.id.slice(0, 8)}) - similitud: ${(1 - row.distance).toFixed(3)}\n${row.content}`)
-          .join("\n\n---\n\n");
-        return { content: [{ type: "text" as const, text }] };
       }
     );
   }
+}
+
+export function registerMemoryTools(server: McpServer): void {
+  const adapter = getNeonSql() ? getNeonAdapter() : sqliteAdapter;
+  registerTools(server, adapter);
 }
