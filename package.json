@@ -13,7 +13,8 @@
     "db:init": "tsx src/db/init.ts",
     "db:export": "tsx src/tools/export.ts",
     "start": "node --disable-warning=ExperimentalWarning dist/server.js",
-    "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --runInBand"
+    "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --runInBand",
+    "claudio": "tsx tools/claudio.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

@@ -34,8 +34,36 @@ npm run dev
 
 ### Herramientas CLI
 
+**CLI unificada (`tools/claudio.ts`):**
+
+Requiere `CLAUDIO_TOKEN` en el entorno (≥32 chars). Opcional: `CLAUDIO_REMOTE_URL`.
+
+```bash
+# Guardar un recuerdo
+npm run claudio -- remember nota "Revisar el PR de CLAUDIO"
+npm run claudio -- remember proyecto "CLAUDIO v2 — refactor de memoria"
+
+# Buscar recuerdos
+npm run claudio -- recall "proyectos activos"
+npm run claudio -- recall "TypeScript" --kind=nota --limit=5
+
+# Eliminar un recuerdo por ID
+npm run claudio -- forget abc12345-...
+
+# Ver briefing de sesión
+npm run claudio -- briefing
+
+# Estado del sistema
+npm run claudio -- status
+```
+
+O directamente con `tsx`:
+```bash
+tsx tools/claudio.ts remember nota "algo importante"
+```
+
+**Otras herramientas:**
 - **Google OAuth (Calendar/Gmail):** `node tools/get-google-token.mjs` — interactivo; no guarda secretos en el repo.
-- **Memoria remota (`claudio_remember`):** `tsx tools/remember.ts <kind> <content>` — requiere `CLAUDIO_TOKEN` en el entorno; opcional `CLAUDIO_REMOTE_URL` si no querés el default del script (ver `.env.example`).
 
 Controles recomendados:
 
@@ -53,9 +81,12 @@ npm test
 
 Hoy `npm test` ejecuta Jest sobre los tests TypeScript del repo. El objetivo es validar comportamiento basico del MCP y de sus servicios auxiliares antes de conectar clientes reales.
 
-Ejemplo actual:
+Tests actuales:
 
-- `src/mcpService.test.ts` verifica lecturas de issues, estado de workflows y creacion de issues, incluyendo caminos de error.
+- `src/mcpService.test.ts` — MCPService: issues, workflows, creación, errores
+- `src/tools/memory.test.ts` — remember, recall, memories, update, forget, status, relate, context
+- `src/tools/github.test.ts` — repos, search, repo detail, issues
+- `src/tools/briefing.test.ts` — briefing con varios estados de DB
 
 ## Regla de iteracion simple
 
