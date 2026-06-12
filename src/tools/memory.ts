@@ -10,6 +10,7 @@ interface MemoryRow {
   kind: string;
   content: string;
   created_at: string;
+  expires_at?: string | null;
 }
 
 interface ProfileRow {
@@ -66,27 +67,33 @@ export function registerMemoryTools(server: McpServer) {
       kind: z.string().describe("Categoria del recuerdo (ej: biografia, proyecto, contacto, nota)"),
       content: z.string().describe("Contenido del recuerdo"),
       metadata: z.record(z.unknown()).optional().describe("Metadatos adicionales"),
+      ttl_days: z.number().int().min(1).optional().describe("Dias hasta que el recuerdo expira. Sin valor = no expira."),
     },
-    async ({ kind, content, metadata }) => {
+    async ({ kind, content, metadata, ttl_days }) => {
       const db = getDb();
       const id = randomUUID();
+      const expires_at = ttl_days
+        ? new Date(Date.now() + ttl_days * 86_400_000).toISOString().replace("T", " ").slice(0, 19)
+        : null;
       db.prepare(`
-        INSERT INTO memories (id, profile_id, kind, content, metadata_json)
-        VALUES (?, 'santiago', ?, ?, ?)
-      `).run(id, kind, content, JSON.stringify(metadata ?? {}));
+        INSERT INTO memories (id, profile_id, kind, content, metadata_json, expires_at)
+        VALUES (?, 'santiago', ?, ?, ?, ?)
+      `).run(id, kind, content, JSON.stringify(metadata ?? {}), expires_at);
       if (process.env.OPENAI_API_KEY) {
         maybeStoreEmbedding(id, content).catch(console.error);
       }
       const row = db
-        .prepare(`SELECT id, kind, content, created_at FROM memories WHERE id = ?`)
+        .prepare(`SELECT id, kind, content, created_at, expires_at FROM memories WHERE id = ?`)
         .get(id) as unknown as MemoryRow;
+      const expiryNote = expires_at ? ` Expira: ${expires_at}.` : "";
       return {
-        content: [{ type: "text" as const, text: `Recuerdo guardado. ID: ${id}` }],
+        content: [{ type: "text" as const, text: `Recuerdo guardado. ID: ${id}.${expiryNote}` }],
         structuredContent: {
           id: row.id,
           kind: row.kind,
           content: row.content,
           created_at: String(row.created_at),
+          expires_at: row.expires_at ?? null,
         },
       };
     }
@@ -106,18 +113,20 @@ export function registerMemoryTools(server: McpServer) {
       try {
         if (kind) {
           rows = db.prepare(`
-            SELECT m.id, m.kind, m.content, m.created_at
+            SELECT m.id, m.kind, m.content, m.created_at, m.expires_at
             FROM memories_fts f
             JOIN memories m ON m.rowid = f.rowid
             WHERE memories_fts MATCH ? AND m.kind = ?
+              AND (m.expires_at IS NULL OR m.expires_at > datetime('now'))
             ORDER BY rank LIMIT ?
           `).all(query, kind, limit) as unknown as MemoryRow[];
         } else {
           rows = db.prepare(`
-            SELECT m.id, m.kind, m.content, m.created_at
+            SELECT m.id, m.kind, m.content, m.created_at, m.expires_at
             FROM memories_fts f
             JOIN memories m ON m.rowid = f.rowid
             WHERE memories_fts MATCH ?
+              AND (m.expires_at IS NULL OR m.expires_at > datetime('now'))
             ORDER BY rank LIMIT ?
           `).all(query, limit) as unknown as MemoryRow[];
         }
@@ -126,14 +135,16 @@ export function registerMemoryTools(server: McpServer) {
         const pattern = `%${query}%`;
         if (kind) {
           rows = db.prepare(`
-            SELECT id, kind, content, created_at FROM memories
+            SELECT id, kind, content, created_at, expires_at FROM memories
             WHERE (content LIKE ? OR kind LIKE ?) AND kind = ?
+              AND (expires_at IS NULL OR expires_at > datetime('now'))
             ORDER BY created_at DESC LIMIT ?
           `).all(pattern, pattern, kind, limit) as unknown as MemoryRow[];
         } else {
           rows = db.prepare(`
-            SELECT id, kind, content, created_at FROM memories
-            WHERE content LIKE ? OR kind LIKE ?
+            SELECT id, kind, content, created_at, expires_at FROM memories
+            WHERE (content LIKE ? OR kind LIKE ?)
+              AND (expires_at IS NULL OR expires_at > datetime('now'))
             ORDER BY created_at DESC LIMIT ?
           `).all(pattern, pattern, limit) as unknown as MemoryRow[];
         }
@@ -167,11 +178,15 @@ export function registerMemoryTools(server: McpServer) {
       let rows: MemoryRow[];
       if (kind) {
         rows = db.prepare(`
-          SELECT id, kind, content, created_at FROM memories WHERE kind = ? ORDER BY created_at DESC
+          SELECT id, kind, content, created_at, expires_at FROM memories
+          WHERE kind = ? AND (expires_at IS NULL OR expires_at > datetime('now'))
+          ORDER BY created_at DESC
         `).all(kind) as unknown as MemoryRow[];
       } else {
         rows = db.prepare(`
-          SELECT id, kind, content, created_at FROM memories ORDER BY kind, created_at DESC
+          SELECT id, kind, content, created_at, expires_at FROM memories
+          WHERE (expires_at IS NULL OR expires_at > datetime('now'))
+          ORDER BY kind, created_at DESC
         `).all() as unknown as MemoryRow[];
       }
       if (rows.length === 0) {
@@ -273,6 +288,50 @@ export function registerMemoryTools(server: McpServer) {
           text: `${result.changes} recuerdo(s) eliminado(s) para la búsqueda: "${query}"`,
         }],
       };
+    }
+  );
+
+  server.tool(
+    "claudio_expire_soon",
+    "Lista recuerdos que van a expirar pronto o que ya expiraron. Útil para revisar y renovar contexto temporal.",
+    {
+      days: z.number().int().min(1).max(90).default(7).describe("Mostrar recuerdos que expiran en los próximos N días"),
+      include_expired: z.boolean().default(false).describe("Incluir recuerdos ya expirados"),
+    },
+    async ({ days, include_expired }) => {
+      const db = getDb();
+      let rows: Array<MemoryRow & { expires_at: string }>;
+      if (include_expired) {
+        rows = db.prepare(`
+          SELECT id, kind, content, created_at, expires_at FROM memories
+          WHERE expires_at IS NOT NULL AND expires_at <= datetime('now', '+' || ? || ' days')
+          ORDER BY expires_at ASC LIMIT 30
+        `).all(days) as unknown as Array<MemoryRow & { expires_at: string }>;
+      } else {
+        rows = db.prepare(`
+          SELECT id, kind, content, created_at, expires_at FROM memories
+          WHERE expires_at IS NOT NULL
+            AND expires_at > datetime('now')
+            AND expires_at <= datetime('now', '+' || ? || ' days')
+          ORDER BY expires_at ASC LIMIT 30
+        `).all(days) as unknown as Array<MemoryRow & { expires_at: string }>;
+      }
+      if (rows.length === 0) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: `No hay recuerdos que expiren en los próximos ${days} día(s).`,
+          }],
+        };
+      }
+      const now = new Date();
+      const text = rows.map((row) => {
+        const exp = new Date(row.expires_at);
+        const diffDays = Math.ceil((exp.getTime() - now.getTime()) / 86_400_000);
+        const status = diffDays <= 0 ? "EXPIRADO" : `expira en ${diffDays}d`;
+        return `[${row.kind}] (${row.id.slice(0, 8)}) [${status}]\n${truncate(row.content, 100)}`;
+      }).join("\n\n---\n\n");
+      return { content: [{ type: "text" as const, text }] };
     }
   );
 

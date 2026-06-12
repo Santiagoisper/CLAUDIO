@@ -23,11 +23,21 @@ export function getDb(): DatabaseSync {
       }
     };
 
+    const runMigrations = (db: DatabaseSync) => {
+      // Add expires_at column if missing (migration for existing DBs)
+      try {
+        db.exec("ALTER TABLE memories ADD COLUMN expires_at TEXT");
+      } catch {
+        // Column already exists — safe to ignore
+      }
+    };
+
     const openDb = (dbPath: string) => {
       ensureSeededDb(dbPath);
       const db = new DatabaseSync(dbPath);
       db.exec("PRAGMA journal_mode = WAL");
       db.exec("PRAGMA foreign_keys = ON");
+      runMigrations(db);
       return db;
     };
 

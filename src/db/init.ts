@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS memories (
   kind TEXT NOT NULL,
   content TEXT NOT NULL,
   metadata_json TEXT NOT NULL DEFAULT '{}',
+  expires_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY(profile_id) REFERENCES profiles(id),
   FOREIGN KEY(source_id) REFERENCES sources(id)

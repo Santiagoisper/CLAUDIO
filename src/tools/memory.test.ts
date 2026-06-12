@@ -22,6 +22,7 @@ function createTestDb(): DatabaseSync {
       kind TEXT NOT NULL,
       content TEXT NOT NULL,
       metadata_json TEXT NOT NULL DEFAULT '{}',
+      expires_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE relations (
@@ -250,6 +251,62 @@ describe("memory tools", () => {
       const handler = handlers.get("claudio_status")!;
       const result = await handler({});
       expect(result.content[0].text).toMatch(/Fecha:/);
+    });
+  });
+
+  describe("claudio_remember con TTL", () => {
+    it("acepta ttl_days y guarda expires_at", async () => {
+      const handler = handlers.get("claudio_remember")!;
+      const result = await handler({ kind: "nota", content: "Nota temporal", ttl_days: 7 });
+      expect(result.content[0].text).toMatch(/Expira:/);
+      const row = testDb.prepare("SELECT expires_at FROM memories WHERE kind = 'nota'").get() as { expires_at: string | null };
+      expect(row?.expires_at).not.toBeNull();
+    });
+
+    it("sin ttl_days el expires_at queda null", async () => {
+      const handler = handlers.get("claudio_remember")!;
+      await handler({ kind: "nota", content: "Nota permanente" });
+      const row = testDb.prepare("SELECT expires_at FROM memories WHERE content = 'Nota permanente'").get() as { expires_at: string | null };
+      expect(row?.expires_at).toBeNull();
+    });
+  });
+
+  describe("claudio_expire_soon", () => {
+    beforeEach(() => {
+      testDb.prepare(
+        "INSERT INTO memories (id, profile_id, kind, content, metadata_json, expires_at) VALUES ('e1', 'santiago', 'nota', 'Expira mañana', '{}', datetime('now', '+1 days'))"
+      ).run();
+      testDb.prepare(
+        "INSERT INTO memories (id, profile_id, kind, content, metadata_json, expires_at) VALUES ('e2', 'santiago', 'nota', 'Expira en 30 dias', '{}', datetime('now', '+30 days'))"
+      ).run();
+      testDb.prepare(
+        "INSERT INTO memories (id, profile_id, kind, content, metadata_json, expires_at) VALUES ('e3', 'santiago', 'nota', 'Ya expiró', '{}', datetime('now', '-1 days'))"
+      ).run();
+      testDb.prepare(
+        "INSERT INTO memories (id, profile_id, kind, content, metadata_json) VALUES ('e4', 'santiago', 'nota', 'Sin expiración', '{}')"
+      ).run();
+    });
+
+    it("muestra solo los que expiran pronto (default 7 días)", async () => {
+      const handler = handlers.get("claudio_expire_soon")!;
+      const result = await handler({ days: 7, include_expired: false });
+      expect(result.content[0].text).toMatch(/Expira mañana/);
+      expect(result.content[0].text).not.toMatch(/Expira en 30 dias/);
+      expect(result.content[0].text).not.toMatch(/Ya expiró/);
+    });
+
+    it("include_expired=true muestra también los expirados", async () => {
+      const handler = handlers.get("claudio_expire_soon")!;
+      const result = await handler({ days: 7, include_expired: true });
+      expect(result.content[0].text).toMatch(/EXPIRADO/);
+      expect(result.content[0].text).toMatch(/Ya expiró/);
+    });
+
+    it("devuelve mensaje cuando no hay recuerdos por expirar", async () => {
+      testDb.exec("DELETE FROM memories WHERE expires_at IS NOT NULL");
+      const handler = handlers.get("claudio_expire_soon")!;
+      const result = await handler({ days: 7, include_expired: false });
+      expect(result.content[0].text).toMatch(/No hay recuerdos/);
     });
   });
 
