@@ -228,6 +228,55 @@ export function registerMemoryTools(server: McpServer) {
   );
 
   server.tool(
+    "claudio_forget_by_query",
+    "Elimina recuerdos que coincidan con una busqueda de texto libre. Muestra una preview antes de eliminar a menos que confirm=true",
+    {
+      query: z.string().describe("Texto a buscar en los recuerdos a eliminar"),
+      kind: z.string().optional().describe("Filtrar por categoria antes de eliminar"),
+      confirm: z.boolean().default(false).describe("Si es false (default), solo muestra los recuerdos que se eliminarian. Si es true, los elimina."),
+    },
+    async ({ query, kind, confirm }) => {
+      const db = getDb();
+      const pattern = `%${query}%`;
+      let rows: MemoryRow[];
+      if (kind) {
+        rows = db.prepare(`
+          SELECT id, kind, content, created_at FROM memories
+          WHERE (content LIKE ? OR kind LIKE ?) AND kind = ?
+          ORDER BY created_at DESC LIMIT 20
+        `).all(pattern, pattern, kind) as unknown as MemoryRow[];
+      } else {
+        rows = db.prepare(`
+          SELECT id, kind, content, created_at FROM memories
+          WHERE content LIKE ? OR kind LIKE ?
+          ORDER BY created_at DESC LIMIT 20
+        `).all(pattern, pattern) as unknown as MemoryRow[];
+      }
+      if (rows.length === 0) {
+        return { content: [{ type: "text" as const, text: `No se encontraron recuerdos para: "${query}"` }] };
+      }
+      if (!confirm) {
+        const preview = rows.map((row) => `  [${row.kind}] (${row.id.slice(0, 8)}) ${truncate(row.content, 80)}`).join("\n");
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Se eliminarian ${rows.length} recuerdo(s):\n\n${preview}\n\nLlama de nuevo con confirm=true para confirmar.`,
+          }],
+        };
+      }
+      const ids = rows.map((row) => row.id);
+      const placeholders = ids.map(() => "?").join(", ");
+      const result = db.prepare(`DELETE FROM memories WHERE id IN (${placeholders})`).run(...ids);
+      return {
+        content: [{
+          type: "text" as const,
+          text: `${result.changes} recuerdo(s) eliminado(s) para la búsqueda: "${query}"`,
+        }],
+      };
+    }
+  );
+
+  server.tool(
     "claudio_profile",
     "Devuelve el perfil de Santiago",
     {},

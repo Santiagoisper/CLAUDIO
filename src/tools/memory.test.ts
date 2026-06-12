@@ -253,6 +253,51 @@ describe("memory tools", () => {
     });
   });
 
+  describe("claudio_forget_by_query", () => {
+    beforeEach(() => {
+      testDb.prepare(
+        "INSERT INTO memories (id, profile_id, kind, content, metadata_json) VALUES ('fq1', 'santiago', 'nota', 'Revisar PR de CLAUDIO', '{}')"
+      ).run();
+      testDb.prepare(
+        "INSERT INTO memories (id, profile_id, kind, content, metadata_json) VALUES ('fq2', 'santiago', 'nota', 'Revisar documentacion', '{}')"
+      ).run();
+      testDb.prepare(
+        "INSERT INTO memories (id, profile_id, kind, content, metadata_json) VALUES ('fq3', 'santiago', 'proyecto', 'CLAUDIO v2', '{}')"
+      ).run();
+    });
+
+    it("devuelve preview sin eliminar cuando confirm=false", async () => {
+      const handler = handlers.get("claudio_forget_by_query")!;
+      const result = await handler({ query: "Revisar", confirm: false });
+      expect(result.content[0].text).toMatch(/Se eliminarian 2/);
+      expect(result.content[0].text).toMatch(/confirm=true/);
+      const count = testDb.prepare("SELECT COUNT(*) as n FROM memories").get() as { n: number };
+      expect(count.n).toBe(3);
+    });
+
+    it("elimina cuando confirm=true", async () => {
+      const handler = handlers.get("claudio_forget_by_query")!;
+      const result = await handler({ query: "Revisar", confirm: true });
+      expect(result.content[0].text).toMatch(/2 recuerdo\(s\) eliminado/);
+      const count = testDb.prepare("SELECT COUNT(*) as n FROM memories").get() as { n: number };
+      expect(count.n).toBe(1);
+    });
+
+    it("filtra por kind antes de eliminar", async () => {
+      const handler = handlers.get("claudio_forget_by_query")!;
+      const result = await handler({ query: "CLAUDIO", kind: "proyecto", confirm: true });
+      expect(result.content[0].text).toMatch(/1 recuerdo\(s\) eliminado/);
+      const remaining = testDb.prepare("SELECT COUNT(*) as n FROM memories").get() as { n: number };
+      expect(remaining.n).toBe(2);
+    });
+
+    it("devuelve mensaje cuando no hay coincidencias", async () => {
+      const handler = handlers.get("claudio_forget_by_query")!;
+      const result = await handler({ query: "nada-que-no-existe", confirm: false });
+      expect(result.content[0].text).toMatch(/No se encontraron/);
+    });
+  });
+
   describe("claudio_relate + claudio_context", () => {
     beforeEach(() => {
       testDb.prepare(
