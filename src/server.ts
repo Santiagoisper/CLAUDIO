@@ -6,7 +6,7 @@ import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import express from "express";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import "dotenv/config";
@@ -17,9 +17,77 @@ import { registerWebTools } from "./tools/web.js";
 import { registerBriefingTools, printBriefingToStderr } from "./tools/briefing.js";
 import { registerCalendarTools } from "./tools/calendar.js";
 import { registerGmailTools } from "./tools/gmail.js";
+import { registerPortfolioTools } from "./tools/portfolio.js";
+import { analyzeDocument, type DocumentAnalysisResult, type DocumentProgressStage } from "./tools/documents.js";
+import { analyzeEmail, type EmailAnalysisResult, type EmailProgressStage } from "./tools/emailAnalysis.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const MAX_HTTP_BODY_BYTES = Number(process.env.CLAUDIO_MAX_HTTP_BODY_BYTES ?? 1_048_576);
+const MAX_HTTP_BODY_BYTES = Number(process.env.CLAUDIO_MAX_HTTP_BODY_BYTES ?? 40 * 1024 * 1024);
+
+interface DocumentJob {
+  id: string;
+  status: "queued" | "running" | "complete" | "error";
+  progress: number;
+  stage: DocumentProgressStage | "queued";
+  message: string;
+  result?: DocumentAnalysisResult;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface EmailJob {
+  id: string;
+  status: "queued" | "running" | "complete" | "error";
+  progress: number;
+  stage: EmailProgressStage | "queued";
+  message: string;
+  result?: EmailAnalysisResult;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+const documentJobs = new Map<string, DocumentJob>();
+const emailJobs = new Map<string, EmailJob>();
+
+function updateDocumentJob(id: string, patch: Partial<DocumentJob>): void {
+  const current = documentJobs.get(id);
+  if (!current) return;
+  documentJobs.set(id, {
+    ...current,
+    ...patch,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+function pruneDocumentJobs(): void {
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  for (const [id, job] of documentJobs) {
+    if (Date.parse(job.updatedAt) < cutoff) {
+      documentJobs.delete(id);
+    }
+  }
+}
+
+function updateEmailJob(id: string, patch: Partial<EmailJob>): void {
+  const current = emailJobs.get(id);
+  if (!current) return;
+  emailJobs.set(id, {
+    ...current,
+    ...patch,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+function pruneEmailJobs(): void {
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  for (const [id, job] of emailJobs) {
+    if (Date.parse(job.updatedAt) < cutoff) {
+      emailJobs.delete(id);
+    }
+  }
+}
 
 function git(cmd: string) {
   try {
@@ -122,7 +190,7 @@ function createRemoteApp() {
     res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS");
     res.setHeader(
       "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, mcp-session-id, Mcp-Session-Id, Accept, mcp-protocol-version, Mcp-Protocol-Version",
+      "Content-Type, Authorization, X-File-Name, X-Mime-Type, X-AI-Provider, X-AI-Model, mcp-session-id, Mcp-Session-Id, Accept, mcp-protocol-version, Mcp-Protocol-Version",
     );
     if (req.method === "OPTIONS") {
       res.status(204).end();
@@ -133,6 +201,20 @@ function createRemoteApp() {
 
   // Middleware para parsear JSON en requests POST
   app.use(express.json({ limit: `${MAX_HTTP_BODY_BYTES}b` }));
+  app.use((error: any, req: any, res: any, next: any) => {
+    if (!error) {
+      next();
+      return;
+    }
+    if (req.path.startsWith("/api/documents")) {
+      const message = error.type === "entity.too.large"
+        ? `El archivo es demasiado grande para subirlo. Limite HTTP: ${Math.round(MAX_HTTP_BODY_BYTES / 1024 / 1024)} MB.`
+        : error.message || "Request JSON invalido";
+      res.status(error.status || 400).json({ error: message });
+      return;
+    }
+    next(error);
+  });
 
   // Health check (sin autenticación)
   app.get("/health", (req, res) => {
@@ -147,13 +229,175 @@ function createRemoteApp() {
   // Rutas de la API MCP - requieren autenticación
   app.use(async (req: any, res: any, next: any) => {
     // Solo proteger rutas MCP
-    if (req.path.startsWith("/api/mcp") || req.path === "/mcp" || req.path === "/sse" || req.path === "/messages") {
+    if (
+      req.path.startsWith("/api/mcp") ||
+      req.path.startsWith("/api/documents") ||
+      req.path.startsWith("/api/email") ||
+      req.path === "/mcp" ||
+      req.path === "/sse" ||
+      req.path === "/messages"
+    ) {
       if (!authed(req)) {
         res.status(401).json({ error: "Unauthorized" });
         return;
       }
     }
     next();
+  });
+
+  async function readRequestBuffer(req: IncomingMessage): Promise<Buffer> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  }
+
+  function createDocumentJob(): DocumentJob {
+    pruneDocumentJobs();
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    const job: DocumentJob = {
+      id,
+      status: "queued",
+      progress: 0,
+      stage: "queued",
+      message: "Analisis en cola",
+      createdAt: now,
+      updatedAt: now,
+    };
+    documentJobs.set(id, job);
+    return job;
+  }
+
+  function runDocumentJob(id: string, input: Parameters<typeof analyzeDocument>[0]): void {
+    void analyzeDocument(input, (update) => {
+      updateDocumentJob(id, {
+        status: "running",
+        progress: update.progress,
+        stage: update.stage,
+        message: update.message,
+      });
+    }).then((result) => {
+      updateDocumentJob(id, {
+        status: "complete",
+        progress: 100,
+        stage: "complete",
+        message: "Analisis completo",
+        result,
+      });
+    }).catch((error) => {
+      updateDocumentJob(id, {
+        status: "error",
+        progress: 100,
+        stage: "complete",
+        message: "Error al analizar documento",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  app.post("/api/documents/analyze-upload", async (req: any, res: any) => {
+    try {
+      const rawFileName = req.headers["x-file-name"];
+      const rawMimeType = req.headers["x-mime-type"];
+      const rawAiProvider = req.headers["x-ai-provider"];
+      const rawAiModel = req.headers["x-ai-model"];
+      const fileName = typeof rawFileName === "string" ? decodeURIComponent(rawFileName) : "documento";
+      const mimeType = typeof rawMimeType === "string" ? rawMimeType : req.headers["content-type"] ?? "";
+      const aiProvider = typeof rawAiProvider === "string" ? rawAiProvider as any : undefined;
+      const aiModel = typeof rawAiModel === "string" ? decodeURIComponent(rawAiModel) : undefined;
+      const dataBuffer = await readRequestBuffer(req);
+      const job = createDocumentJob();
+      res.status(202).json(job);
+      runDocumentJob(job.id, { fileName, mimeType, dataBuffer, aiProvider, aiModel });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(400).json({ error: message });
+    }
+  });
+
+  app.post("/api/documents/analyze", async (req: any, res: any) => {
+    try {
+      const job = createDocumentJob();
+      res.status(202).json(job);
+      runDocumentJob(job.id, req.body);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(400).json({ error: message });
+    }
+  });
+
+  app.get("/api/documents/analyze/:id", (req: any, res: any) => {
+    const job = documentJobs.get(req.params.id);
+    if (!job) {
+      res.status(404).json({ error: "Trabajo de analisis no encontrado" });
+      return;
+    }
+    res.json(job);
+  });
+
+  function createEmailJob(): EmailJob {
+    pruneEmailJobs();
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    const job: EmailJob = {
+      id,
+      status: "queued",
+      progress: 0,
+      stage: "queued",
+      message: "Analisis en cola",
+      createdAt: now,
+      updatedAt: now,
+    };
+    emailJobs.set(id, job);
+    return job;
+  }
+
+  app.post("/api/email/analyze", async (req: any, res: any) => {
+    try {
+      const range = req.body?.range ?? "last_day";
+      const aiProvider = req.body?.aiProvider;
+      const aiModel = req.body?.aiModel;
+      const job = createEmailJob();
+      res.status(202).json(job);
+      void analyzeEmail({ range, aiProvider, aiModel }, (update) => {
+        updateEmailJob(job.id, {
+          status: "running",
+          progress: update.progress,
+          stage: update.stage,
+          message: update.message,
+        });
+      }).then((result) => {
+        updateEmailJob(job.id, {
+          status: "complete",
+          progress: 100,
+          stage: "complete",
+          message: "Analisis completo",
+          result,
+        });
+      }).catch((error) => {
+        updateEmailJob(job.id, {
+          status: "error",
+          progress: 100,
+          stage: "complete",
+          message: "Error al analizar correo",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(400).json({ error: message });
+    }
+  });
+
+  app.get("/api/email/analyze/:id", (req: any, res: any) => {
+    const job = emailJobs.get(req.params.id);
+    if (!job) {
+      res.status(404).json({ error: "Trabajo de analisis de correo no encontrado" });
+      return;
+    }
+    res.json(job);
   });
 
   app.post("/mcp", async (req: any, res: any) => {
@@ -255,3 +499,4 @@ if (SHOULD_RUN_HTTP) {
     process.exit(1);
   }
 }
+

@@ -5,6 +5,7 @@
  */
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import http from "node:http";
 
 const SCOPES = [
   "https://www.googleapis.com/auth/calendar",
@@ -18,12 +19,52 @@ console.log("\n=== CLAUDIO — Google OAuth Setup ===\n");
 
 const clientId     = await rl.question("Client ID     : ");
 const clientSecret = await rl.question("Client Secret : ");
+const redirectUri = "http://127.0.0.1:8787/oauth2callback";
+
+function waitForCode() {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer((req, res) => {
+      try {
+        const url = new URL(req.url ?? "/", redirectUri);
+        if (url.pathname !== "/oauth2callback") {
+          res.writeHead(404).end("Not found");
+          return;
+        }
+        const error = url.searchParams.get("error");
+        if (error) {
+          res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+          res.end(`Google devolvió error: ${error}`);
+          server.close();
+          reject(new Error(error));
+          return;
+        }
+        const code = url.searchParams.get("code");
+        if (!code) {
+          res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+          res.end("Falta el parámetro code.");
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("CLAUDIO recibió el código. Podés volver a la terminal.");
+        server.close();
+        resolve(code);
+      } catch (error) {
+        server.close();
+        reject(error);
+      }
+    });
+    server.listen(8787, "127.0.0.1", () => {
+      console.log("\nServidor local escuchando en http://127.0.0.1:8787/oauth2callback");
+    });
+    server.on("error", reject);
+  });
+}
 
 const authUrl =
   "https://accounts.google.com/o/oauth2/v2/auth?" +
   new URLSearchParams({
     client_id:     clientId.trim(),
-    redirect_uri:  "urn:ietf:wg:oauth:2.0:oob",
+    redirect_uri:  redirectUri,
     response_type: "code",
     scope:         SCOPES,
     access_type:   "offline",
@@ -33,9 +74,9 @@ const authUrl =
 console.log("\n1. Abrí este URL en el navegador:\n");
 console.log(authUrl);
 console.log("\n2. Iniciá sesión con tu cuenta Google y autorizá los permisos.");
-console.log("3. Google te muestra un código. Copialo y pegalo abajo.\n");
+console.log("3. Google vuelve a localhost y CLAUDIO captura el código automáticamente.\n");
 
-const code = await rl.question("Código de autorización: ");
+const code = await waitForCode();
 
 const res = await fetch("https://oauth2.googleapis.com/token", {
   method: "POST",
@@ -44,7 +85,7 @@ const res = await fetch("https://oauth2.googleapis.com/token", {
     code:          code.trim(),
     client_id:     clientId.trim(),
     client_secret: clientSecret.trim(),
-    redirect_uri:  "urn:ietf:wg:oauth:2.0:oob",
+    redirect_uri:  redirectUri,
     grant_type:    "authorization_code",
   }),
 });

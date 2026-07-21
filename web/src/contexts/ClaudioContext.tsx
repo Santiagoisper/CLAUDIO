@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback } from "react";
+import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
 
 interface ClaudioConfig {
   apiUrl: string;
@@ -19,20 +19,22 @@ const STORAGE_KEY = "claudio-config";
 
 export function ClaudioProvider({ children }: { children: React.ReactNode }) {
   const [config, setConfig] = useState<ClaudioConfig>(() => {
-    // Cargar configuración desde localStorage o env vars
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      try {
-        return JSON.parse(stored);
-      } catch {
-        // Ignorar si no se puede parsear
-      }
+    // Limpiar localStorage viejo
+    localStorage.clear();
+
+    const envToken = import.meta.env.VITE_CLAUDIO_TOKEN || "";
+    const cfg = {
+      apiUrl: import.meta.env.VITE_CLAUDIO_API_URL || "http://localhost:3737",
+      token: envToken,
+    };
+
+    // Si hay token en env, guardarlo en localStorage
+    if (envToken) {
+      localStorage.setItem("claudio_token", envToken);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
     }
 
-    return {
-      apiUrl: import.meta.env.VITE_CLAUDIO_API_URL || "http://localhost:3737",
-      token: import.meta.env.VITE_CLAUDIO_TOKEN || "",
-    };
+    return cfg;
   });
 
   const isConfigured = !!config.token && !!config.apiUrl;
@@ -41,11 +43,17 @@ export function ClaudioProvider({ children }: { children: React.ReactNode }) {
     const newConfig = { apiUrl, token };
     setConfig(newConfig);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(newConfig));
+    if (token) {
+      localStorage.setItem("claudio_token", token);
+    } else {
+      localStorage.removeItem("claudio_token");
+    }
   }, []);
 
   const clearConfig = useCallback(() => {
     setConfig({ apiUrl: "", token: "" });
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem("claudio_token");
   }, []);
 
   return (

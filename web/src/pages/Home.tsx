@@ -16,10 +16,19 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { Menu, X, Plus, Search, Brain, Settings, LogOut, Loader2, AlertCircle, Lock } from "lucide-react";
-import { useClaudio, type Memory } from "@/hooks/useClaudio";
+import { Menu, X, Plus, Search, Brain, Settings, LogOut, Loader2, AlertCircle, Lock, FileText, Upload, Save, Mail } from "lucide-react";
+import { useClaudio, type AiProvider, type AiSelection, type DocumentAnalysisResult, type DocumentAnalyzeProgress, type EmailAnalysisResult, type EmailAnalyzeProgress, type EmailRange, type Memory } from "@/hooks/useClaudio";
 import { useClaudioConfig } from "@/contexts/ClaudioContext";
 import { toast } from "sonner";
+
+const AI_MODEL_PRESETS: Record<AiProvider, string[]> = {
+  openai: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"],
+  groq: ["llama-3.3-70b-versatile", "deepseek-r1-distill-llama-70b", "qwen/qwen3-32b", "openai/gpt-oss-120b"],
+  deepseek: ["deepseek-chat", "deepseek-reasoner"],
+  anthropic: ["claude-3-5-haiku-latest", "claude-sonnet-4-5", "claude-haiku-4-5"],
+  gemini: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"],
+  ollama: ["llama3.1:8b", "llama3.1:70b", "qwen2.5:14b", "deepseek-r1:14b", "mistral:7b"],
+};
 
 export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -32,11 +41,22 @@ export default function Home() {
   const [showNewForm, setShowNewForm] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
   const [showTokenForm, setShowTokenForm] = useState(false);
-  const [section, setSection] = useState<"memoria" | "configuracion">("memoria");
+  const [section, setSection] = useState<"memoria" | "documentos" | "correo" | "configuracion">("memoria");
   const [settingsUrl, setSettingsUrl] = useState("");
   const [settingsToken, setSettingsToken] = useState("");
+  const [documentFile, setDocumentFile] = useState<File | null>(null);
+  const [documentResult, setDocumentResult] = useState<DocumentAnalysisResult | null>(null);
+  const [documentMemoryContent, setDocumentMemoryContent] = useState("");
+  const [documentKind, setDocumentKind] = useState("documento");
+  const [documentProgress, setDocumentProgress] = useState<DocumentAnalyzeProgress | null>(null);
+  const [emailRange, setEmailRange] = useState<EmailRange>("last_day");
+  const [emailProgress, setEmailProgress] = useState<EmailAnalyzeProgress | null>(null);
+  const [emailResult, setEmailResult] = useState<EmailAnalysisResult | null>(null);
+  const [emailMemoryContent, setEmailMemoryContent] = useState("");
+  const [aiProvider, setAiProvider] = useState<AiProvider>("openai");
+  const [aiModel, setAiModel] = useState("gpt-4o-mini");
 
-  const { memories, loading, error, isConnected, fetchMemories, searchMemories, createMemory, updateMemory, deleteMemory, checkConnection } = useClaudio();
+  const { memories, loading, error, isConnected, fetchMemories, searchMemories, createMemory, updateMemory, deleteMemory, analyzeDocument, analyzeEmail, checkConnection } = useClaudio();
   const { config, saveConfig } = useClaudioConfig();
 
   useEffect(() => {
@@ -151,6 +171,109 @@ export default function Home() {
     }
   };
 
+  const handleAnalyzeDocument = async () => {
+    if (!documentFile) {
+      toast.error("Seleccioná un PDF, DOCX o TXT");
+      return;
+    }
+    setDocumentResult(null);
+    setDocumentMemoryContent("");
+    setDocumentProgress({
+      status: "queued",
+      progress: 0,
+      stage: "reading",
+      message: "Leyendo archivo",
+    });
+    const result = await analyzeDocument(documentFile, { provider: aiProvider, model: aiModel }, setDocumentProgress);
+    if (!result) {
+      toast.error(error || "Error al analizar documento");
+      return;
+    }
+    setDocumentResult(result);
+    setDocumentMemoryContent(result.memoryContent);
+    setDocumentKind(result.analysis.suggestedKind || "documento");
+    setDocumentProgress({
+      status: "complete",
+      progress: 100,
+      stage: "complete",
+      message: "Documento analizado",
+    });
+    toast.success("Documento analizado");
+  };
+
+  const handleSaveDocumentMemory = async () => {
+    if (!documentResult || !documentMemoryContent.trim()) {
+      toast.error("No hay resumen para guardar");
+      return;
+    }
+    const memory = await createMemory(documentKind || "documento", documentMemoryContent, {
+      source: "document_upload",
+      fileName: documentResult.fileName,
+      mimeType: documentResult.mimeType,
+      extractedCharCount: documentResult.extractedCharCount,
+      analyzedCharCount: documentResult.analyzedCharCount,
+      chunkCount: documentResult.chunkCount,
+      tags: documentResult.analysis.tags,
+    });
+    if (memory) {
+      toast.success("Resumen guardado en memoria");
+      setSelectedMemory(memory);
+      setSection("memoria");
+    } else {
+      toast.error(error || "No pude guardar el resumen");
+    }
+  };
+
+  const handleAnalyzeEmail = async () => {
+    setEmailResult(null);
+    setEmailMemoryContent("");
+    setEmailProgress({
+      status: "queued",
+      progress: 0,
+      stage: "queued",
+      message: "Iniciando analisis de correo",
+    });
+    const result = await analyzeEmail(emailRange, { provider: aiProvider, model: aiModel }, setEmailProgress);
+    if (!result) {
+      toast.error(error || "No pude analizar el correo");
+      return;
+    }
+    setEmailResult(result);
+    setEmailMemoryContent(formatEmailMemory(result));
+    setEmailProgress({
+      status: "complete",
+      progress: 100,
+      stage: "complete",
+      message: "Analisis completo",
+    });
+    toast.success("Correo analizado");
+  };
+
+  const handleSaveEmailMemory = async () => {
+    if (!emailResult || !emailMemoryContent.trim()) {
+      toast.error("No hay análisis para guardar");
+      return;
+    }
+    const memory = await createMemory("analisis_correo", emailMemoryContent, {
+      source: "gmail_analysis",
+      range: emailResult.range,
+      query: emailResult.query,
+      messageCount: emailResult.messageCount,
+      sentCount: emailResult.sentCount,
+      receivedCount: emailResult.receivedCount,
+      threadCount: emailResult.threadCount,
+      analyzedAt: emailResult.analyzedAt,
+      tags: emailResult.analysis.tags,
+    });
+    if (memory) {
+      toast.success("Análisis de correo guardado en memoria");
+      setSelectedMemory(memory);
+      setSection("memoria");
+    } else {
+      toast.error(error || "No pude guardar el análisis");
+    }
+  };
+
   const handleLogout = () => {
     localStorage.removeItem('claudio_token');
     setShowTokenForm(true);
@@ -228,6 +351,18 @@ export default function Home() {
             onClick={() => setSection("memoria")}
           />
           <NavItem
+            icon={FileText}
+            label="Documentos"
+            active={section === "documentos"}
+            onClick={() => setSection("documentos")}
+          />
+          <NavItem
+            icon={Mail}
+            label="Correo"
+            active={section === "correo"}
+            onClick={() => setSection("correo")}
+          />
+          <NavItem
             icon={Settings}
             label="Configuración"
             active={section === "configuracion"}
@@ -276,7 +411,7 @@ export default function Home() {
               )}
             </button>
             <h2 className="text-xl font-semibold" style={{ fontFamily: "Merriweather" }}>
-              {section === "memoria" ? "Memoria" : "Configuración"}
+              {section === "memoria" ? "Memoria" : section === "documentos" ? "Documentos" : section === "correo" ? "Correo" : "Configuración"}
             </h2>
           </div>
           {section === "memoria" && (
@@ -349,6 +484,267 @@ export default function Home() {
                 Estado: {isConnected ? "conectado al servidor" : "sin conexión"} — probá Guardar y revisá que la URL sea correcta.
               </p>
             </Card>
+          </div>
+        ) : section === "documentos" ? (
+          <div className="flex-1 overflow-y-auto p-8">
+            <div className="max-w-5xl space-y-6">
+              <Card className="p-6 space-y-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <h3 className="text-lg font-semibold" style={{ fontFamily: "Merriweather" }}>
+                      Subir documento
+                    </h3>
+                    <p className="text-sm text-muted-foreground">
+                      Acepta PDF, DOCX o TXT. Claudio analiza el texto y te deja confirmar qué se guarda.
+                    </p>
+                  </div>
+                  <Upload className="w-5 h-5 text-muted-foreground" />
+                </div>
+                <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+                  <Input
+                    type="file"
+                    accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] ?? null;
+                      setDocumentFile(file);
+                      setDocumentResult(null);
+                      setDocumentMemoryContent("");
+                      setDocumentProgress(null);
+                    }}
+                    className="bg-secondary border-border"
+                    disabled={!isConnected || loading}
+                  />
+                  <Button
+                    type="button"
+                    onClick={handleAnalyzeDocument}
+                    disabled={!isConnected || !documentFile || loading}
+                    className="gap-2 bg-primary hover:bg-primary/90"
+                  >
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+                    Analizar
+                  </Button>
+                </div>
+                <AiSelector
+                  provider={aiProvider}
+                  model={aiModel}
+                  onProviderChange={(provider) => {
+                    setAiProvider(provider);
+                    setAiModel(AI_MODEL_PRESETS[provider][0]);
+                  }}
+                  onModelChange={setAiModel}
+                />
+                {documentFile && (
+                  <p className="text-xs text-muted-foreground font-mono">
+                    {documentFile.name} · {(documentFile.size / 1024).toFixed(1)} KB
+                  </p>
+                )}
+                {documentProgress && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs font-mono text-muted-foreground">
+                      <span>{documentProgress.message}</span>
+                      <span>{Math.min(100, Math.max(0, documentProgress.progress))}%</span>
+                    </div>
+                    <div className="h-2 w-full overflow-hidden rounded bg-secondary">
+                      <div
+                        className="h-full bg-primary transition-all duration-300"
+                        style={{ width: `${Math.min(100, Math.max(0, documentProgress.progress))}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </Card>
+
+              {documentResult && (
+                <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
+                  <Card className="p-6 space-y-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-xs font-mono text-muted-foreground">Resumen a guardar</p>
+                        <h3 className="text-xl font-semibold mt-1" style={{ fontFamily: "Merriweather" }}>
+                          {documentResult.analysis.title}
+                        </h3>
+                      </div>
+                      <Button
+                        type="button"
+                        onClick={handleSaveDocumentMemory}
+                        disabled={loading || !documentMemoryContent.trim()}
+                        className="gap-2 bg-primary hover:bg-primary/90"
+                      >
+                        {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                        Guardar
+                      </Button>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Tipo de recuerdo</label>
+                      <Input
+                        value={documentKind}
+                        onChange={(e) => setDocumentKind(e.target.value)}
+                        className="bg-secondary border-border max-w-xs"
+                      />
+                    </div>
+                    <Textarea
+                      value={documentMemoryContent}
+                      onChange={(e) => setDocumentMemoryContent(e.target.value)}
+                      className="min-h-96 bg-secondary border-border font-mono text-sm"
+                    />
+                  </Card>
+
+                  <div className="space-y-6">
+                    <Card className="p-5 space-y-3">
+                      <p className="text-xs font-mono text-muted-foreground">Extracción</p>
+                      <div className="text-sm space-y-1">
+                        <p>Caracteres extraídos: {documentResult.extractedCharCount.toLocaleString("es-AR")}</p>
+                        <p>Caracteres analizados: {documentResult.analyzedCharCount.toLocaleString("es-AR")}</p>
+                        <p>Bloques analizados: {documentResult.chunkCount.toLocaleString("es-AR")}</p>
+                      </div>
+                      <div className="pt-2 border-t border-border">
+                        <p className="text-xs font-mono text-muted-foreground mb-2">Vista previa</p>
+                        <p className="text-xs whitespace-pre-wrap max-h-72 overflow-auto text-muted-foreground">
+                          {documentResult.extractedPreview}
+                        </p>
+                      </div>
+                    </Card>
+                    <Card className="p-5 space-y-3">
+                      <p className="text-xs font-mono text-muted-foreground">Etiquetas</p>
+                      <div className="flex flex-wrap gap-2">
+                        {documentResult.analysis.tags.length > 0 ? (
+                          documentResult.analysis.tags.map((tag) => (
+                            <span key={tag} className="px-2 py-1 rounded bg-secondary text-xs">
+                              {tag}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-sm text-muted-foreground">Sin etiquetas</span>
+                        )}
+                      </div>
+                    </Card>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : section === "correo" ? (
+          <div className="flex-1 overflow-y-auto p-8">
+            <div className="max-w-6xl space-y-6">
+              <Card className="p-6 space-y-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <h3 className="text-lg font-semibold" style={{ fontFamily: "Merriweather" }}>
+                      Analizar correo
+                    </h3>
+                    <p className="text-sm text-muted-foreground">
+                      Incluye recibidos y enviados. Es solo lectura: no archiva, no borra y no envía.
+                    </p>
+                  </div>
+                  <Mail className="w-5 h-5 text-muted-foreground" />
+                </div>
+                <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+                  <select
+                    value={emailRange}
+                    onChange={(e) => setEmailRange(e.target.value as EmailRange)}
+                    className="w-full px-3 py-2 border border-border rounded bg-secondary text-sm"
+                    disabled={!isConnected || loading}
+                  >
+                    <option value="last_day">Último día</option>
+                    <option value="last_messages">Últimos mensajes</option>
+                    <option value="last_week">Última semana</option>
+                    <option value="last_month">Último mes</option>
+                    <option value="last_6_months">Últimos 6 meses</option>
+                    <option value="last_year">Último año</option>
+                    <option value="all">Todos los mails</option>
+                  </select>
+                  <Button
+                    type="button"
+                    onClick={handleAnalyzeEmail}
+                    disabled={!isConnected || loading}
+                    className="gap-2 bg-primary hover:bg-primary/90"
+                  >
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                    Analizar
+                  </Button>
+                </div>
+                <AiSelector
+                  provider={aiProvider}
+                  model={aiModel}
+                  onProviderChange={(provider) => {
+                    setAiProvider(provider);
+                    setAiModel(AI_MODEL_PRESETS[provider][0]);
+                  }}
+                  onModelChange={setAiModel}
+                />
+                {emailProgress && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs font-mono text-muted-foreground">
+                      <span>{emailProgress.message}</span>
+                      <span>{Math.min(100, Math.max(0, emailProgress.progress))}%</span>
+                    </div>
+                    <div className="h-2 w-full overflow-hidden rounded bg-secondary">
+                      <div
+                        className="h-full bg-primary transition-all duration-300"
+                        style={{ width: `${Math.min(100, Math.max(0, emailProgress.progress))}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </Card>
+
+              {emailResult && (
+                <div className="space-y-6">
+                  <Card className="p-6 space-y-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-xs font-mono text-muted-foreground">Qué conviene guardar</p>
+                        <p className="text-sm text-muted-foreground mt-1">
+                          Guardá patrones, pendientes, personas y temas recurrentes. No hace falta guardar el contenido completo de los mails.
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        onClick={handleSaveEmailMemory}
+                        disabled={loading || !emailMemoryContent.trim()}
+                        className="gap-2 bg-primary hover:bg-primary/90"
+                      >
+                        {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                        Guardar
+                      </Button>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-4">
+                      <Metric label="Mails" value={emailResult.messageCount} />
+                      <Metric label="Enviados" value={emailResult.sentCount} />
+                      <Metric label="Recibidos" value={emailResult.receivedCount} />
+                      <Metric label="Hilos" value={emailResult.threadCount} />
+                    </div>
+                    <div>
+                      <p className="text-xs font-mono text-muted-foreground mb-2">Síntesis</p>
+                      <p className="text-sm leading-relaxed whitespace-pre-wrap">{emailResult.analysis.executiveSummary}</p>
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-xs font-mono text-muted-foreground">Recuerdo editable</p>
+                      <Textarea
+                        value={emailMemoryContent}
+                        onChange={(e) => setEmailMemoryContent(e.target.value)}
+                        className="min-h-72 bg-secondary border-border font-mono text-sm"
+                      />
+                    </div>
+                  </Card>
+
+                  <div className="grid gap-6 lg:grid-cols-2">
+                    <AnalysisCard title="Pendiente de tu respuesta" items={emailResult.analysis.awaitingYourReply} />
+                    <AnalysisCard title="Esperando de otros" items={emailResult.analysis.waitingOnOthers} />
+                    <AnalysisCard title="Urgente" items={emailResult.analysis.urgentItems} />
+                    <AnalysisCard title="Acciones sugeridas" items={emailResult.analysis.suggestedActions} />
+                    <AnalysisCard title="Patrones de comportamiento" items={emailResult.analysis.behaviorPatterns} />
+                    <AnalysisCard title="Estilo de comunicación" items={emailResult.analysis.communicationStyle} />
+                    <AnalysisCard title="Temas prioritarios" items={emailResult.analysis.priorityThemes} />
+                    <AnalysisCard title="Personas clave" items={emailResult.analysis.keyPeople} />
+                    <AnalysisCard title="Proyectos y temas" items={emailResult.analysis.projectsAndTopics} />
+                    <AnalysisCard title="Riesgos" items={emailResult.analysis.risks} />
+                    <AnalysisCard title="Oportunidades" items={emailResult.analysis.opportunities} />
+                    <AnalysisCard title="Etiquetas" items={emailResult.analysis.tags} />
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         ) : (
         <div className="flex-1 flex overflow-hidden">
@@ -561,4 +957,137 @@ function NavItem({
       <span className="text-sm">{label}</span>
     </button>
   );
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded border border-border bg-secondary p-3">
+      <p className="text-xs font-mono text-muted-foreground">{label}</p>
+      <p className="text-2xl font-semibold mt-1">{value.toLocaleString("es-AR")}</p>
+    </div>
+  );
+}
+
+function AnalysisCard({ title, items }: { title: string; items: string[] }) {
+  return (
+    <Card className="p-5 space-y-3">
+      <p className="text-xs font-mono text-muted-foreground">{title}</p>
+      {items.length > 0 ? (
+        <ul className="space-y-2">
+          {items.map((item, index) => (
+            <li key={`${title}-${index}`} className="text-sm leading-relaxed">
+              {item}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-sm text-muted-foreground">Sin hallazgos.</p>
+      )}
+    </Card>
+  );
+}
+
+function AiSelector({
+  provider,
+  model,
+  onProviderChange,
+  onModelChange,
+}: {
+  provider: AiProvider;
+  model: string;
+  onProviderChange: (provider: AiProvider) => void;
+  onModelChange: (model: string) => void;
+}) {
+  return (
+    <div className="grid gap-3 md:grid-cols-[180px_260px_1fr]">
+      <div className="space-y-1">
+        <label className="text-xs font-mono text-muted-foreground">Proveedor IA</label>
+        <select
+          value={provider}
+          onChange={(e) => onProviderChange(e.target.value as AiProvider)}
+          className="w-full px-3 py-2 border border-border rounded bg-secondary text-sm"
+        >
+          <option value="openai">OpenAI</option>
+          <option value="groq">Groq</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="anthropic">Anthropic</option>
+          <option value="gemini">Gemini</option>
+          <option value="ollama">Ollama local</option>
+        </select>
+      </div>
+      <div className="space-y-1">
+        <label className="text-xs font-mono text-muted-foreground">Preset</label>
+        <select
+          value={AI_MODEL_PRESETS[provider].includes(model) ? model : ""}
+          onChange={(e) => e.target.value && onModelChange(e.target.value)}
+          className="w-full px-3 py-2 border border-border rounded bg-secondary text-sm"
+        >
+          {!AI_MODEL_PRESETS[provider].includes(model) && <option value="">Modelo personalizado</option>}
+          {AI_MODEL_PRESETS[provider].map((preset) => (
+            <option key={preset} value={preset}>
+              {preset}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="space-y-1">
+        <label className="text-xs font-mono text-muted-foreground">Modelo</label>
+        <Input
+          value={model}
+          onChange={(e) => onModelChange(e.target.value)}
+          className="bg-secondary border-border font-mono text-sm"
+          placeholder="nombre-del-modelo"
+          autoComplete="off"
+        />
+      </div>
+    </div>
+  );
+}
+
+function formatEmailMemory(result: EmailAnalysisResult): string {
+  const a = result.analysis;
+  const lines = [
+    `Analisis de correo: ${labelEmailRange(result.range)}`,
+    `Fecha de analisis: ${new Date(result.analyzedAt).toLocaleString("es-AR")}`,
+    `Mails analizados: ${result.messageCount} (${result.receivedCount} recibidos, ${result.sentCount} enviados, ${result.threadCount} hilos)`,
+    "",
+    "Sintesis:",
+    a.executiveSummary,
+  ];
+
+  addSection(lines, "Pendiente de respuesta de Santiago", a.awaitingYourReply);
+  addSection(lines, "Santiago espera de otros", a.waitingOnOthers);
+  addSection(lines, "Urgente", a.urgentItems);
+  addSection(lines, "Acciones sugeridas", a.suggestedActions);
+  addSection(lines, "Patrones de comportamiento", a.behaviorPatterns);
+  addSection(lines, "Estilo de comunicacion", a.communicationStyle);
+  addSection(lines, "Temas prioritarios", a.priorityThemes);
+  addSection(lines, "Personas clave", a.keyPeople);
+  addSection(lines, "Proyectos y temas", a.projectsAndTopics);
+  addSection(lines, "Riesgos", a.risks);
+  addSection(lines, "Oportunidades", a.opportunities);
+
+  if (a.tags.length > 0) {
+    lines.push("", `Etiquetas: ${a.tags.join(", ")}`);
+  }
+
+  return lines.join("\n").trim();
+}
+
+function addSection(lines: string[], title: string, items: string[]) {
+  if (items.length === 0) return;
+  lines.push("", `${title}:`, ...items.map((item) => `- ${item}`));
+}
+
+function labelEmailRange(range: EmailRange): string {
+  const labels: Record<EmailRange, string> = {
+    last_day: "ultimo dia",
+    last_messages: "ultimos mensajes",
+    last_week: "ultima semana",
+    last_month: "ultimo mes",
+    last_6_months: "ultimos 6 meses",
+    last_year: "ultimo año",
+    all: "todos los mails",
+  };
+  return labels[range];
 }

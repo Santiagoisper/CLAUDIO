@@ -1,0 +1,12 @@
+{
+  "type": "module",
+  "scripts": {
+    "save": "node agent-memory.mjs save",
+    "recall": "node agent-memory.mjs recall",
+    "chat": "node agent-memory.mjs chat"
+  },
+  "dependencies": {
+    "@supermemory/tools": "^2.0.0",
+    "openai": "^6.41.0"
+  }
+}
