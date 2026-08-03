@@ -11,6 +11,8 @@ const EMAIL_BATCH_SIZE = Number(process.env.CLAUDIO_EMAIL_BATCH_SIZE ?? 8);
 const MAX_BODY_CHARS_PER_EMAIL = Number(
   process.env.CLAUDIO_EMAIL_BODY_CHARS ?? 900,
 );
+const EMAIL_FETCH_CONCURRENCY = Number(process.env.CLAUDIO_EMAIL_FETCH_CONCURRENCY ?? 6);
+const GMAIL_TIMEOUT_MS = Number(process.env.CLAUDIO_GMAIL_TIMEOUT_MS ?? 20_000);
 
 export type EmailRange =
   | "last_day"
@@ -112,7 +114,7 @@ function queryForRange(range: EmailRange): {
     case "last_messages":
       return { query: "in:anywhere", maxMessages: 50 };
     case "last_week":
-      return { query: "in:anywhere newer_than:7d" };
+      return { query: "in:anywhere newer_than:7d", maxMessages: 150 };
     case "last_month":
       return { query: "in:anywhere newer_than:30d" };
     case "last_6_months":
@@ -127,7 +129,7 @@ function queryForRange(range: EmailRange): {
 async function gmailFetch<T>(token: string, path: string): Promise<T> {
   const res = await fetch(`${GMAIL_API}${path}`, {
     headers: { Authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(60_000),
+    signal: AbortSignal.timeout(GMAIL_TIMEOUT_MS),
   });
   if (!res.ok)
     throw new Error(`Gmail API error ${res.status}: ${await res.text()}`);
@@ -346,21 +348,29 @@ export async function analyzeEmail(
   if (refs.length === 0)
     throw new Error("No se encontraron mails para ese rango.");
 
-  const emails: EmailDigest[] = [];
-  for (let i = 0; i < refs.length; i += 1) {
-    const msg = await gmailFetch<GmailMessage>(
-      token,
-      `/messages/${refs[i].id}?format=full`,
-    );
-    emails.push(digestMessage(msg));
-    if (i % 10 === 0 || i === refs.length - 1) {
+  let fetched = 0;
+  let activeFetches = 0;
+  const emails = await Promise.all(refs.map(async (ref) => {
+    // El pequeño pool evita una espera secuencial de cientos de requests.
+    while (activeFetches >= EMAIL_FETCH_CONCURRENCY) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    activeFetches += 1;
+    try {
+      const msg = await gmailFetch<GmailMessage>(token, `/messages/${ref.id}?format=full`);
+      return digestMessage(msg);
+    } finally {
+      activeFetches -= 1;
+      fetched += 1;
+      if (fetched % 10 === 0 || fetched === refs.length) {
       onProgress?.({
-        progress: 5 + Math.round(((i + 1) / refs.length) * 45),
+        progress: 5 + Math.round((fetched / refs.length) * 45),
         stage: "fetching",
-        message: `Leyendo mails ${i + 1} de ${refs.length}`,
+        message: `Leyendo mails ${fetched} de ${refs.length}`,
       });
     }
-  }
+    }
+  }));
 
   const batches = chunkEmails(emails);
   const partials: unknown[] = [];
