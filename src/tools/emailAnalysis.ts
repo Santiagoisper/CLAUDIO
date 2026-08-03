@@ -7,7 +7,9 @@ import {
 } from "./google.js";
 
 const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
-const EMAIL_BATCH_SIZE = Number(process.env.CLAUDIO_EMAIL_BATCH_SIZE ?? 8);
+// 20 mensajes mantiene cada prompt dentro de un tamaño seguro y evita que una
+// semana normal se convierta en decenas de llamadas secuenciales al modelo.
+const EMAIL_BATCH_SIZE = Number(process.env.CLAUDIO_EMAIL_BATCH_SIZE ?? 20);
 const MAX_BODY_CHARS_PER_EMAIL = Number(
   process.env.CLAUDIO_EMAIL_BODY_CHARS ?? 900,
 );
