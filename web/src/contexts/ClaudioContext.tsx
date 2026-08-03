@@ -19,17 +19,31 @@ const STORAGE_KEY = "claudio-config";
 
 export function ClaudioProvider({ children }: { children: React.ReactNode }) {
   const [config, setConfig] = useState<ClaudioConfig>(() => {
-    // Limpiar localStorage viejo
-    localStorage.clear();
-
     const envToken = import.meta.env.VITE_CLAUDIO_TOKEN || "";
     const apiUrl = import.meta.env.PROD && typeof window !== "undefined"
       ? window.location.origin
       : import.meta.env.VITE_CLAUDIO_API_URL || "http://localhost:3737";
-    const cfg = {
+    const fallbackConfig = {
       apiUrl,
-      token: envToken,
+      token: "",
     };
+
+    // La configuración ingresada por el usuario debe sobrevivir a recargas.
+    // Nunca se limpia todo localStorage: puede borrar el token recién guardado.
+    let savedConfig: ClaudioConfig | null = null;
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<ClaudioConfig>;
+        if (typeof parsed.apiUrl === "string" && typeof parsed.token === "string") {
+          savedConfig = { apiUrl: parsed.apiUrl, token: parsed.token };
+        }
+      }
+    } catch {
+      localStorage.removeItem(STORAGE_KEY);
+    }
+
+    const cfg = envToken ? { apiUrl, token: envToken } : savedConfig ?? fallbackConfig;
 
     // Si hay token en env, guardarlo en localStorage
     if (envToken) {
