@@ -12,7 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import "dotenv/config";
 import { registerMemoryTools } from "./tools/memory.js";
-import { refreshPersonalGithubContext, registerGithubTools } from "./tools/github.js";
+import { getPersonalGithubContext, refreshPersonalGithubContext, registerGithubTools } from "./tools/github.js";
 import { registerShellTools } from "./tools/shell.js";
 import { registerWebTools } from "./tools/web.js";
 import {
@@ -550,6 +550,11 @@ function createRemoteApp() {
   app.post("/api/github/update", async (_req: any, res: any) => {
     try {
       const result = await refreshPersonalGithubContext();
+      const content = await getPersonalGithubContext("inventario completo");
+      getDb().prepare(`
+        INSERT INTO memories (id, profile_id, kind, content, metadata_json)
+        VALUES (?, 'santiago', 'github_personal', ?, ?)
+      `).run(randomUUID(), content, JSON.stringify({ source: "github_update", updatedAt: result.updatedAt, repoCount: result.repoCount }));
       res.json(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
