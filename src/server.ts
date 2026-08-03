@@ -4,6 +4,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import express from "express";
+import { z } from "zod";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import { randomUUID, timingSafeEqual } from "node:crypto";
@@ -42,6 +43,7 @@ import {
   connectAllMemoryNodes,
   rememberChatExchange,
 } from "./tools/memory-chat.js";
+import { getDb } from "./db/index.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const MAX_HTTP_BODY_BYTES = Number(
@@ -513,6 +515,83 @@ function createRemoteApp() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       res.status(400).json({ error: message });
+    }
+  });
+
+  // Canal temporal para trasladar una memoria local a un volumen remoto vacío.
+  // No usa el token del panel: exige un segundo secreto de migración y queda
+  // apagado por completo cuando CLAUDIO_MIGRATION_TOKEN no está definido.
+  const migrationColumns = {
+    profiles: ["id", "display_name", "email", "metadata_json", "created_at", "updated_at"],
+    sources: ["id", "kind", "external_id", "title", "uri", "metadata_json", "created_at"],
+    memories: ["id", "profile_id", "source_id", "kind", "content", "metadata_json", "created_at"],
+    snapshots: ["id", "source_id", "source_kind", "snapshot_path", "metadata_json", "captured_at"],
+    relations: ["id", "from_id", "to_id", "relation_type", "created_at"],
+    whatsapp_watch_contacts: ["id", "phone", "label", "created_at"],
+  } as const;
+  const migrationPayload = z.object({
+    table: z.enum([
+      "profiles",
+      "sources",
+      "memories",
+      "snapshots",
+      "relations",
+      "whatsapp_watch_contacts",
+    ]),
+    records: z.array(z.record(z.string(), z.string().nullable())).min(1).max(100),
+  });
+
+  app.post("/api/admin/memory-import", (req: any, res: any) => {
+    const migrationToken = process.env.CLAUDIO_MIGRATION_TOKEN;
+    const suppliedToken = req.headers["x-claudio-migration-token"];
+    if (
+      !migrationToken ||
+      migrationToken.length < 32 ||
+      typeof suppliedToken !== "string" ||
+      !safeTokenEquals(migrationToken, suppliedToken)
+    ) {
+      res.status(404).end();
+      return;
+    }
+
+    const parsed = migrationPayload.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Lote de migración inválido" });
+      return;
+    }
+
+    const { table, records } = parsed.data;
+    const columns = migrationColumns[table];
+    if (
+      records.some((record) =>
+        columns.some((column) => record[column] === undefined),
+      )
+    ) {
+      res.status(400).json({ error: "Faltan columnas requeridas en el lote" });
+      return;
+    }
+
+    const placeholders = columns.map(() => "?").join(", ");
+    const statement = getDb().prepare(
+      `INSERT OR IGNORE INTO ${table} (${columns.join(", ")}) VALUES (${placeholders})`,
+    );
+    let inserted = 0;
+    try {
+      getDb().exec("BEGIN IMMEDIATE");
+      for (const record of records) {
+        inserted += Number(
+          statement.run(...columns.map((column) => record[column])).changes,
+        );
+      }
+      getDb().exec("COMMIT");
+      res.json({ table, received: records.length, inserted });
+    } catch {
+      try {
+        getDb().exec("ROLLBACK");
+      } catch {
+        // No había transacción activa.
+      }
+      res.status(500).json({ error: "No se pudo importar el lote" });
     }
   });
 

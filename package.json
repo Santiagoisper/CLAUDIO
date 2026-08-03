@@ -10,6 +10,7 @@
     "dev": "concurrently \"npm run dev:mcp\" \"npm run dev:web\"",
     "build": "tsc && cd web && vite build --config ../vite.config.ts",
     "setup:machine": "node scripts/setup-machine.mjs",
+    "memory:migrate:remote": "node --experimental-sqlite --env-file=.env scripts/migrate-memory-to-remote.mjs",
     "start:mcp": "node --disable-warning=ExperimentalWarning dist/server.js",
     "db:init": "tsx src/db/init.ts",
     "db:export": "tsx src/tools/export.ts",
