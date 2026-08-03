@@ -212,7 +212,7 @@ function asksAboutProfile(query: string): boolean {
 }
 
 function asksAboutAssets(query: string): boolean {
-  return /\b(activo|activos|cartera|portafolio|posición|posiciones|patrimonio)\b/i.test(query);
+  return /\b(activo|activos|cartera|portafolio|posición|posiciones|patrimonio|cuentas?\s+personales?)\b/i.test(query);
 }
 
 async function profileMemory(): Promise<MemoryRow | null> {

@@ -271,25 +271,30 @@ export default function Home() {
       stage: "reading",
       message: "Leyendo archivo",
     });
-    const result = await analyzeDocument(
-      documentFile,
-      { provider: aiProvider, model: aiModel },
-      setDocumentProgress,
-    );
-    if (!result) {
-      toast.error(error || "Error al analizar documento");
-      return;
+    try {
+      const result = await analyzeDocument(
+        documentFile,
+        { provider: aiProvider, model: aiModel },
+        setDocumentProgress,
+      );
+      if (!result) throw new Error("El servidor no devolvió un resultado.");
+      setDocumentResult(result);
+      setDocumentMemoryContent(result.memoryContent);
+      setDocumentKind(result.analysis.suggestedKind || "documento");
+      setDocumentProgress({
+        status: "complete",
+        progress: 100,
+        stage: "complete",
+        message: "Documento analizado",
+      });
+      toast.success("Documento analizado");
+    } catch (analysisError) {
+      const message = analysisError instanceof Error
+        ? analysisError.message
+        : "Error al analizar documento";
+      setDocumentProgress({ status: "error", progress: 100, stage: "complete", message });
+      toast.error(message);
     }
-    setDocumentResult(result);
-    setDocumentMemoryContent(result.memoryContent);
-    setDocumentKind(result.analysis.suggestedKind || "documento");
-    setDocumentProgress({
-      status: "complete",
-      progress: 100,
-      stage: "complete",
-      message: "Documento analizado",
-    });
-    toast.success("Documento analizado");
   };
 
   const handleSaveDocumentMemory = async () => {

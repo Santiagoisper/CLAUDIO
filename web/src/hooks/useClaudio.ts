@@ -545,7 +545,7 @@ export function useClaudio() {
         const message =
           err instanceof Error ? err.message : "Error al analizar documento";
         setError(message);
-        return null;
+        throw new Error(message);
       } finally {
         setLoading(false);
       }
