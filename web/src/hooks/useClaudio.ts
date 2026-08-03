@@ -49,12 +49,50 @@ interface DocumentAnalyzeJob extends DocumentAnalyzeProgress {
   error?: string;
 }
 
-export type EmailRange = "last_day" | "last_messages" | "last_week" | "last_month" | "last_6_months" | "last_year" | "all";
-export type AiProvider = "openai" | "groq" | "deepseek" | "anthropic" | "gemini" | "ollama";
+export type EmailRange =
+  | "last_day"
+  | "last_messages"
+  | "last_week"
+  | "last_month"
+  | "last_6_months"
+  | "last_year"
+  | "all";
+export type EmailAccount = "personal" | "cinme";
+export type AiProvider =
+  | "openai"
+  | "groq"
+  | "deepseek"
+  | "anthropic"
+  | "gemini"
+  | "ollama";
 
 export interface AiSelection {
   provider: AiProvider;
   model: string;
+}
+
+export interface MemoryChatSource {
+  id: string;
+  kind: string;
+  createdAt: string;
+  excerpt: string;
+}
+
+export interface MemoryChatResult {
+  answer: string;
+  sources: MemoryChatSource[];
+}
+
+export interface GithubUpdateResult {
+  updatedAt: string;
+  repoCount: number;
+}
+
+export interface WhatsappWatchContact {
+  id: string;
+  phone: string;
+  label: string | null;
+  created_at: string;
 }
 
 export interface EmailAnalyzeProgress {
@@ -66,6 +104,7 @@ export interface EmailAnalyzeProgress {
 
 export interface EmailAnalysisResult {
   id: string;
+  account: EmailAccount;
   range: EmailRange;
   query: string;
   messageCount: number;
@@ -103,12 +142,12 @@ function normalizeBaseUrl(url: string): string {
 
 /** Base del API: env Vite > mismo origen en prod > localhost dev (Vite en :3000). */
 function defaultApiBase(): string {
+  if (import.meta.env.PROD && typeof window !== "undefined") {
+    return window.location.origin;
+  }
   const env = import.meta.env.VITE_CLAUDIO_API_URL;
   if (typeof env === "string" && env.trim() !== "") {
     return env.trim();
-  }
-  if (import.meta.env.PROD && typeof window !== "undefined") {
-    return window.location.origin;
   }
   return "http://localhost:3737";
 }
@@ -117,7 +156,12 @@ function readAuthToken(configToken: string): string {
   if (typeof window === "undefined") return "";
   const envToken = import.meta.env.VITE_CLAUDIO_TOKEN;
   const storedToken = localStorage.getItem("claudio_token");
-  return storedToken || configToken || (typeof envToken === "string" ? envToken : "") || "";
+  return (
+    storedToken ||
+    configToken ||
+    (typeof envToken === "string" ? envToken : "") ||
+    ""
+  );
 }
 
 async function readJsonResponse<T>(response: Response): Promise<T> {
@@ -125,7 +169,9 @@ async function readJsonResponse<T>(response: Response): Promise<T> {
   const text = await response.text();
   if (!contentType.includes("application/json")) {
     const head = text.slice(0, 120).replace(/\s+/g, " ");
-    throw new Error(`Respuesta no JSON desde ${response.url}: ${head || response.statusText}`);
+    throw new Error(
+      `Respuesta no JSON desde ${response.url}: ${head || response.statusText}`,
+    );
   }
   return JSON.parse(text) as T;
 }
@@ -144,7 +190,10 @@ function uploadDocumentFile(
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${apiUrl}/api/documents/analyze-upload`);
-    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    xhr.setRequestHeader(
+      "Content-Type",
+      file.type || "application/octet-stream",
+    );
     xhr.setRequestHeader("X-File-Name", encodeURIComponent(file.name));
     xhr.setRequestHeader("X-Mime-Type", file.type || "");
     xhr.setRequestHeader("X-AI-Provider", aiSelection.provider);
@@ -161,7 +210,10 @@ function uploadDocumentFile(
         });
         return;
       }
-      const uploadProgress = Math.max(1, Math.min(10, Math.round((event.loaded / event.total) * 10)));
+      const uploadProgress = Math.max(
+        1,
+        Math.min(10, Math.round((event.loaded / event.total) * 10)),
+      );
       onProgress?.({
         status: "queued",
         progress: uploadProgress,
@@ -174,12 +226,24 @@ function uploadDocumentFile(
     xhr.onload = () => {
       const contentType = xhr.getResponseHeader("content-type") || "";
       if (!contentType.includes("application/json")) {
-        reject(new Error(`Respuesta no JSON desde ${apiUrl}: ${xhr.responseText.slice(0, 120).replace(/\s+/g, " ")}`));
+        reject(
+          new Error(
+            `Respuesta no JSON desde ${apiUrl}: ${xhr.responseText.slice(0, 120).replace(/\s+/g, " ")}`,
+          ),
+        );
         return;
       }
-      const payload = JSON.parse(xhr.responseText) as DocumentAnalyzeJob | { error?: string };
+      const payload = JSON.parse(xhr.responseText) as
+        | DocumentAnalyzeJob
+        | { error?: string };
       if (xhr.status < 200 || xhr.status >= 300) {
-        reject(new Error("error" in payload && payload.error ? payload.error : `HTTP ${xhr.status}`));
+        reject(
+          new Error(
+            "error" in payload && payload.error
+              ? payload.error
+              : `HTTP ${xhr.status}`,
+          ),
+        );
         return;
       }
       resolve(payload as DocumentAnalyzeJob);
@@ -212,7 +276,10 @@ export function useClaudio() {
   }, [checkConnection]);
 
   const callMcpTool = useCallback(
-    async <T,>(toolName: string, params: Record<string, unknown>): Promise<T | null> => {
+    async <T>(
+      toolName: string,
+      params: Record<string, unknown>,
+    ): Promise<T | null> => {
       try {
         setLoading(true);
         setError(null);
@@ -230,7 +297,10 @@ export function useClaudio() {
           body: JSON.stringify({
             jsonrpc: "2.0",
             // MCP: id debe ser string o entero (Math.random() es float → 400 Invalid JSON-RPC).
-            id: typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : Date.now(),
+            id:
+              typeof crypto !== "undefined" && "randomUUID" in crypto
+                ? crypto.randomUUID()
+                : Date.now(),
             method: "tools/call",
             params: {
               name: toolName,
@@ -244,7 +314,11 @@ export function useClaudio() {
         }
 
         const data = await readJsonResponse<{
-          result?: { structuredContent?: unknown; data?: unknown; isError?: boolean };
+          result?: {
+            structuredContent?: unknown;
+            data?: unknown;
+            isError?: boolean;
+          };
           error?: { message?: string };
         }>(response);
         if (data.error) {
@@ -255,10 +329,14 @@ export function useClaudio() {
           throw new Error("La herramienta devolvió error");
         }
         // MCP usa `structuredContent`; el panel antiguo esperaba `data`.
-        const payload = (r?.structuredContent ?? r?.data) as T | null | undefined;
+        const payload = (r?.structuredContent ?? r?.data) as
+          | T
+          | null
+          | undefined;
         return payload ?? null;
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Error desconocido";
+        const message =
+          err instanceof Error ? err.message : "Error desconocido";
         setError(message);
         return null;
       } finally {
@@ -274,22 +352,26 @@ export function useClaudio() {
         setLoading(true);
         setError(null);
 
-        const result = await callMcpTool<{ memories: Memory[] }>("claudio_memories", {
-          ...(kind && { kind }),
-          limit: 50,
-        });
+        const result = await callMcpTool<{ memories: Memory[] }>(
+          "claudio_memories",
+          {
+            ...(kind && { kind }),
+            limit: 50,
+          },
+        );
 
         if (result?.memories) {
           setMemories(result.memories);
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Error al cargar memorias";
+        const message =
+          err instanceof Error ? err.message : "Error al cargar memorias";
         setError(message);
       } finally {
         setLoading(false);
       }
     },
-    [callMcpTool]
+    [callMcpTool],
   );
 
   const searchMemories = useCallback(
@@ -298,27 +380,35 @@ export function useClaudio() {
         setLoading(true);
         setError(null);
 
-        const result = await callMcpTool<{ memories: Memory[] }>("claudio_recall", {
-          query,
-          ...(kind && { kind }),
-          limit: 50,
-        });
+        const result = await callMcpTool<{ memories: Memory[] }>(
+          "claudio_recall",
+          {
+            query,
+            ...(kind && { kind }),
+            limit: 50,
+          },
+        );
 
         if (result?.memories) {
           setMemories(result.memories);
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Error en búsqueda";
+        const message =
+          err instanceof Error ? err.message : "Error en búsqueda";
         setError(message);
       } finally {
         setLoading(false);
       }
     },
-    [callMcpTool]
+    [callMcpTool],
   );
 
   const createMemory = useCallback(
-    async (kind: string, content: string, metadata?: Record<string, unknown>) => {
+    async (
+      kind: string,
+      content: string,
+      metadata?: Record<string, unknown>,
+    ) => {
       try {
         setLoading(true);
         setError(null);
@@ -334,14 +424,15 @@ export function useClaudio() {
           return result;
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Error al crear recuerdo";
+        const message =
+          err instanceof Error ? err.message : "Error al crear recuerdo";
         setError(message);
       } finally {
         setLoading(false);
       }
       return null;
     },
-    [callMcpTool]
+    [callMcpTool],
   );
 
   const updateMemory = useCallback(
@@ -353,16 +444,17 @@ export function useClaudio() {
         await callMcpTool("claudio_update", { id, content });
 
         setMemories((prev) =>
-          prev.map((m) => (m.id === id ? { ...m, content } : m))
+          prev.map((m) => (m.id === id ? { ...m, content } : m)),
         );
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Error al actualizar";
+        const message =
+          err instanceof Error ? err.message : "Error al actualizar";
         setError(message);
       } finally {
         setLoading(false);
       }
     },
-    [callMcpTool]
+    [callMcpTool],
   );
 
   const deleteMemory = useCallback(
@@ -375,13 +467,14 @@ export function useClaudio() {
 
         setMemories((prev) => prev.filter((m) => m.id !== id));
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Error al eliminar";
+        const message =
+          err instanceof Error ? err.message : "Error al eliminar";
         setError(message);
       } finally {
         setLoading(false);
       }
     },
-    [callMcpTool]
+    [callMcpTool],
   );
 
   const analyzeDocument = useCallback(
@@ -401,20 +494,36 @@ export function useClaudio() {
         });
 
         const token = readAuthToken(config.token);
-        const startPayload = await uploadDocumentFile(apiUrl, token, file, aiSelection, onProgress);
+        const startPayload = await uploadDocumentFile(
+          apiUrl,
+          token,
+          file,
+          aiSelection,
+          onProgress,
+        );
         const jobId = startPayload.id;
-        if (!jobId) throw new Error("El servidor no devolvio jobId de analisis");
+        if (!jobId)
+          throw new Error("El servidor no devolvio jobId de analisis");
 
         for (;;) {
           await wait(900);
-          const statusResponse = await fetch(`${apiUrl}/api/documents/analyze/${jobId}`, {
-            headers: {
-              ...(token && { Authorization: `Bearer ${token}` }),
+          const statusResponse = await fetch(
+            `${apiUrl}/api/documents/analyze/${jobId}`,
+            {
+              headers: {
+                ...(token && { Authorization: `Bearer ${token}` }),
+              },
             },
-          });
-          const job = await readJsonResponse<DocumentAnalyzeJob | { error?: string }>(statusResponse);
+          );
+          const job = await readJsonResponse<
+            DocumentAnalyzeJob | { error?: string }
+          >(statusResponse);
           if (!statusResponse.ok) {
-            throw new Error("error" in job && job.error ? job.error : `HTTP ${statusResponse.status}`);
+            throw new Error(
+              "error" in job && job.error
+                ? job.error
+                : `HTTP ${statusResponse.status}`,
+            );
           }
           const progressJob = job as DocumentAnalyzeJob;
           onProgress?.({
@@ -424,7 +533,8 @@ export function useClaudio() {
             message: progressJob.message,
           });
           if (progressJob.status === "complete") {
-            if (!progressJob.result) throw new Error("Analisis completo sin resultado");
+            if (!progressJob.result)
+              throw new Error("Analisis completo sin resultado");
             return progressJob.result;
           }
           if (progressJob.status === "error") {
@@ -432,7 +542,8 @@ export function useClaudio() {
           }
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Error al analizar documento";
+        const message =
+          err instanceof Error ? err.message : "Error al analizar documento";
         setError(message);
         return null;
       } finally {
@@ -445,6 +556,7 @@ export function useClaudio() {
   const analyzeEmail = useCallback(
     async (
       range: EmailRange,
+      account: EmailAccount,
       aiSelection: AiSelection,
       onProgress?: (progress: EmailAnalyzeProgress) => void,
     ): Promise<EmailAnalysisResult | null> => {
@@ -465,25 +577,45 @@ export function useClaudio() {
             "Content-Type": "application/json",
             ...(token && { Authorization: `Bearer ${token}` }),
           },
-          body: JSON.stringify({ range, aiProvider: aiSelection.provider, aiModel: aiSelection.model }),
+          body: JSON.stringify({
+            range,
+            account,
+            aiProvider: aiSelection.provider,
+            aiModel: aiSelection.model,
+          }),
         });
-        const startPayload = await readJsonResponse<EmailAnalyzeJob | { error?: string }>(startResponse);
+        const startPayload = await readJsonResponse<
+          EmailAnalyzeJob | { error?: string }
+        >(startResponse);
         if (!startResponse.ok) {
-          throw new Error("error" in startPayload && startPayload.error ? startPayload.error : `HTTP ${startResponse.status}`);
+          throw new Error(
+            "error" in startPayload && startPayload.error
+              ? startPayload.error
+              : `HTTP ${startResponse.status}`,
+          );
         }
         const jobId = (startPayload as EmailAnalyzeJob).id;
         if (!jobId) throw new Error("El servidor no devolvio jobId de correo");
 
         for (;;) {
           await wait(1200);
-          const statusResponse = await fetch(`${apiUrl}/api/email/analyze/${jobId}`, {
-            headers: {
-              ...(token && { Authorization: `Bearer ${token}` }),
+          const statusResponse = await fetch(
+            `${apiUrl}/api/email/analyze/${jobId}`,
+            {
+              headers: {
+                ...(token && { Authorization: `Bearer ${token}` }),
+              },
             },
-          });
-          const job = await readJsonResponse<EmailAnalyzeJob | { error?: string }>(statusResponse);
+          );
+          const job = await readJsonResponse<
+            EmailAnalyzeJob | { error?: string }
+          >(statusResponse);
           if (!statusResponse.ok) {
-            throw new Error("error" in job && job.error ? job.error : `HTTP ${statusResponse.status}`);
+            throw new Error(
+              "error" in job && job.error
+                ? job.error
+                : `HTTP ${statusResponse.status}`,
+            );
           }
           const progressJob = job as EmailAnalyzeJob;
           onProgress?.({
@@ -493,7 +625,8 @@ export function useClaudio() {
             message: progressJob.message,
           });
           if (progressJob.status === "complete") {
-            if (!progressJob.result) throw new Error("Analisis de correo completo sin resultado");
+            if (!progressJob.result)
+              throw new Error("Analisis de correo completo sin resultado");
             return progressJob.result;
           }
           if (progressJob.status === "error") {
@@ -501,7 +634,8 @@ export function useClaudio() {
           }
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Error al analizar correo";
+        const message =
+          err instanceof Error ? err.message : "Error al analizar correo";
         setError(message);
         return null;
       } finally {
@@ -511,15 +645,114 @@ export function useClaudio() {
     [apiUrl, config.token],
   );
 
+  const askMemoryChat = useCallback(
+    async (
+      message: string,
+      aiSelection: AiSelection,
+      includeGithub = false,
+    ): Promise<MemoryChatResult | null> => {
+      try {
+        setLoading(true);
+        setError(null);
+        const token = readAuthToken(config.token);
+        const response = await fetch(`${apiUrl}/api/chat/memory`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token && { Authorization: `Bearer ${token}` }),
+          },
+          body: JSON.stringify({
+            message,
+            aiProvider: aiSelection.provider,
+            aiModel: aiSelection.model,
+            includeGithub,
+          }),
+        });
+        const payload = await readJsonResponse<MemoryChatResult | { error?: string }>(response);
+        if (!response.ok) {
+          throw new Error("error" in payload && payload.error ? payload.error : `HTTP ${response.status}`);
+        }
+        return payload as MemoryChatResult;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Error al consultar la memoria");
+        return null;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [apiUrl, config.token],
+  );
+
+  const refreshGithub = useCallback(async (): Promise<GithubUpdateResult | null> => {
+    try {
+      setLoading(true);
+      setError(null);
+      const token = readAuthToken(config.token);
+      const response = await fetch(`${apiUrl}/api/github/update`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token && { Authorization: `Bearer ${token}` }),
+        },
+      });
+      const payload = await readJsonResponse<GithubUpdateResult | { error?: string }>(response);
+      if (!response.ok) {
+        throw new Error("error" in payload && payload.error ? payload.error : `HTTP ${response.status}`);
+      }
+      return payload as GithubUpdateResult;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error al actualizar GitHub");
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, [apiUrl, config.token]);
+
+  const whatsappRequest = useCallback(async <T>(path: string, init?: RequestInit): Promise<T | null> => {
+    try {
+      setLoading(true);
+      setError(null);
+      const token = readAuthToken(config.token);
+      const response = await fetch(`${apiUrl}${path}`, {
+        ...init,
+        headers: { "Content-Type": "application/json", ...(token && { Authorization: `Bearer ${token}` }), ...(init?.headers ?? {}) },
+      });
+      if (response.status === 204) return {} as T;
+      const payload = await readJsonResponse<T | { error?: string }>(response);
+      if (!response.ok) throw new Error("error" in payload && payload.error ? payload.error : `HTTP ${response.status}`);
+      return payload as T;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error de WhatsApp");
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, [apiUrl, config.token]);
+
+  const listWhatsappContacts = useCallback(async () => {
+    const result = await whatsappRequest<{ contacts: WhatsappWatchContact[] }>("/api/whatsapp/contacts");
+    return result?.contacts ?? null;
+  }, [whatsappRequest]);
+
+  const addWhatsappContact = useCallback(async (phone: string, label: string) =>
+    whatsappRequest<WhatsappWatchContact>("/api/whatsapp/contacts", { method: "POST", body: JSON.stringify({ phone, label }) }), [whatsappRequest]);
+
+  const removeWhatsappContact = useCallback(async (id: string) =>
+    whatsappRequest<void>(`/api/whatsapp/contacts/${id}`, { method: "DELETE" }), [whatsappRequest]);
+
   const getBriefing = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
 
-      const result = await callMcpTool<{ briefing: string }>("claudio_briefing", {});
+      const result = await callMcpTool<{ briefing: string }>(
+        "claudio_briefing",
+        {},
+      );
       return result?.briefing || null;
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Error al obtener briefing";
+      const message =
+        err instanceof Error ? err.message : "Error al obtener briefing";
       setError(message);
       return null;
     } finally {
@@ -539,6 +772,11 @@ export function useClaudio() {
     deleteMemory,
     analyzeDocument,
     analyzeEmail,
+    askMemoryChat,
+    refreshGithub,
+    listWhatsappContacts,
+    addWhatsappContact,
+    removeWhatsappContact,
     getBriefing,
     checkConnection,
   };

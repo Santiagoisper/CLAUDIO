@@ -2,6 +2,7 @@ node_modules/
 dist/
 .env
 data/backups/
+data/*.db
 claudio-memory-export-*.zip
 package-lock.json
 .cursor/

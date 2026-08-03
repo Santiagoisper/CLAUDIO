@@ -23,8 +23,11 @@ export function ClaudioProvider({ children }: { children: React.ReactNode }) {
     localStorage.clear();
 
     const envToken = import.meta.env.VITE_CLAUDIO_TOKEN || "";
+    const apiUrl = import.meta.env.PROD && typeof window !== "undefined"
+      ? window.location.origin
+      : import.meta.env.VITE_CLAUDIO_API_URL || "http://localhost:3737";
     const cfg = {
-      apiUrl: import.meta.env.VITE_CLAUDIO_API_URL || "http://localhost:3737",
+      apiUrl,
       token: envToken,
     };
 

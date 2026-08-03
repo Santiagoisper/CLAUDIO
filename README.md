@@ -2,6 +2,16 @@
 
 Guia rapida para trabajar el MCP sin perder control del entorno.
 
+## Máquina nueva o agente nuevo
+
+La instrucción canónica está en [MACHINE_SETUP.md](MACHINE_SETUP.md). Para dejar una máquina lista de forma reproducible, con Node.js 22 o superior:
+
+```bash
+node scripts/setup-machine.mjs
+```
+
+El bootstrap instala exactamente el lockfile, crea `.env` desde la plantilla si falta y valida el build; nunca copia ni solicita secretos. Para usar CLAUDIO desde otro lugar sin instalar nada, abrí la instancia remota: https://claudio-production-cdd0.up.railway.app
+
 ## MCP: encender y apagar
 
 ### Modo local

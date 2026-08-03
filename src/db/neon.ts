@@ -107,8 +107,10 @@ export async function ensureNeonSchema(): Promise<boolean> {
 
     await sql`
       INSERT INTO profiles (id, display_name, email)
-      VALUES ('santiago', 'Santiago Jorge Isbert Perlender', 'sisbert@cinme.com.ar')
-      ON CONFLICT (id) DO NOTHING
+      VALUES ('santiago', 'Santiago Jorge Isbert Perlender', 'santiagoip1973@gmail.com')
+      ON CONFLICT (id) DO UPDATE
+      SET email = EXCLUDED.email, updated_at = NOW()
+      WHERE profiles.email = 'sisbert@cinme.com.ar'
     `;
 
     _schemaReady = true;

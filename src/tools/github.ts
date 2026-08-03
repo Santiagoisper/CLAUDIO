@@ -31,6 +31,19 @@ interface GHSearchReposResponse {
   items: GHRepo[];
 }
 
+interface GHUser {
+  login: string;
+  name: string | null;
+}
+
+interface PersonalGithubCache {
+  user: GHUser;
+  repos: GHRepo[];
+  updatedAt: string;
+}
+
+let personalGithubCache: PersonalGithubCache | null = null;
+
 function getGithubApiBaseUrl(): URL {
   const base = new URL(process.env.GITHUB_API_BASE_URL ?? "https://api.github.com");
   const allowedHosts = (process.env.GITHUB_ALLOWED_API_HOSTS ?? "")
@@ -57,6 +70,73 @@ async function ghFetch(path: string): Promise<unknown> {
   });
   if (!res.ok) throw new Error(`GitHub ${res.status}: ${await res.text()}`);
   return res.json();
+}
+
+async function fetchAllPersonalRepos(): Promise<GHRepo[]> {
+  const repos: GHRepo[] = [];
+  for (let page = 1; page <= 100; page += 1) {
+    const batch = await ghFetch(
+      `/user/repos?sort=updated&direction=desc&per_page=100&page=${page}`,
+    ) as GHRepo[];
+    repos.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return repos;
+}
+
+function githubSearchTerms(question: string): string[] {
+  return (question.toLocaleLowerCase("es-AR").match(/[\p{L}\p{N}]{3,}/gu) ?? [])
+    .filter((term) => !["github", "repositorio", "repositorios", "tengo", "sobre", "para", "cuales"].includes(term));
+}
+
+export async function refreshPersonalGithubContext(): Promise<{
+  updatedAt: string;
+  repoCount: number;
+}> {
+  if (!process.env.GITHUB_TOKEN) {
+    throw new Error("GitHub no está configurado en CLAUDIO.");
+  }
+  const [user, repos] = await Promise.all([
+    ghFetch("/user") as Promise<GHUser>,
+    fetchAllPersonalRepos(),
+  ]);
+  personalGithubCache = {
+    user,
+    repos,
+    updatedAt: new Date().toISOString(),
+  };
+  return {
+    updatedAt: personalGithubCache.updatedAt,
+    repoCount: personalGithubCache.repos.length,
+  };
+}
+
+export async function getPersonalGithubContext(question: string): Promise<string> {
+  await refreshPersonalGithubContext();
+  const cache = personalGithubCache!;
+  const terms = githubSearchTerms(question);
+  const rankedRepos = [...cache.repos].sort((a, b) => {
+    const aText = `${a.full_name} ${a.description ?? ""} ${a.language ?? ""}`.toLocaleLowerCase("es-AR");
+    const bText = `${b.full_name} ${b.description ?? ""} ${b.language ?? ""}`.toLocaleLowerCase("es-AR");
+    const aScore = terms.filter((term) => aText.includes(term)).length;
+    const bScore = terms.filter((term) => bText.includes(term)).length;
+    return bScore - aScore;
+  });
+  const selectedRepos = rankedRepos.slice(0, 60);
+  const repoList = selectedRepos
+    .map((repo) => {
+      const details = [
+        repo.full_name,
+        repo.private ? "privado" : "público",
+        repo.language ?? "sin lenguaje detectado",
+        repo.description ?? "sin descripción",
+        `actualizado: ${repo.updated_at}`,
+      ];
+      return details.join(" · ");
+    })
+    .join("\n");
+  const selectionLabel = terms.length > 0 ? "Repositorios más relevantes" : "Repositorios más recientes";
+  return `Cuenta GitHub personal: ${cache.user.name ?? cache.user.login} (@${cache.user.login})\nRepositorios actualizados en inventario: ${cache.repos.length}\n${selectionLabel} para esta consulta (máximo 60):\n${repoList || "Sin repositorios disponibles."}`;
 }
 
 function formatRepo(repo: GHRepo): string {

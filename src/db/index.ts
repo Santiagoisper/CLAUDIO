@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import "dotenv/config";
+import { ensureSqliteSchema } from "./schema.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BUNDLED = path.resolve(__dirname, "../../data/claudio.db");
@@ -28,6 +29,7 @@ export function getDb(): DatabaseSync {
       const db = new DatabaseSync(dbPath);
       db.exec("PRAGMA journal_mode = WAL");
       db.exec("PRAGMA foreign_keys = ON");
+      ensureSqliteSchema(db);
       return db;
     };
 

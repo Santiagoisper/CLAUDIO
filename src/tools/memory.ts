@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { getDb, loadSqliteVec } from "../db/index.js";
 import { getNeonSql } from "../db/neon.js";
 import { registerNeonMemoryTools } from "./memory-neon.js";
+import { connectMemoryNode } from "./memory-chat.js";
 
 interface MemoryRow {
   id: string;
@@ -80,6 +81,7 @@ export function registerMemoryTools(server: McpServer) {
       const row = db
         .prepare(`SELECT id, kind, content, created_at FROM memories WHERE id = ?`)
         .get(id) as unknown as MemoryRow;
+      connectMemoryNode(db, row.id, row.content);
       return {
         content: [{ type: "text" as const, text: `Recuerdo guardado. ID: ${id}` }],
         structuredContent: {

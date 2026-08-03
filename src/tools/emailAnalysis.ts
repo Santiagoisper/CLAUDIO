@@ -1,15 +1,35 @@
 import { randomUUID } from "node:crypto";
 import { callAiJson, type AiSelection } from "./ai.js";
+import {
+  getGoogleAccessToken,
+  hasGoogleAccount,
+  type GoogleAccount,
+} from "./google.js";
 
 const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
 const EMAIL_BATCH_SIZE = Number(process.env.CLAUDIO_EMAIL_BATCH_SIZE ?? 8);
-const MAX_BODY_CHARS_PER_EMAIL = Number(process.env.CLAUDIO_EMAIL_BODY_CHARS ?? 900);
+const MAX_BODY_CHARS_PER_EMAIL = Number(
+  process.env.CLAUDIO_EMAIL_BODY_CHARS ?? 900,
+);
 
-export type EmailRange = "last_day" | "last_messages" | "last_week" | "last_month" | "last_6_months" | "last_year" | "all";
-export type EmailProgressStage = "listing" | "fetching" | "analyzing" | "synthesizing" | "complete";
+export type EmailRange =
+  | "last_day"
+  | "last_messages"
+  | "last_week"
+  | "last_month"
+  | "last_6_months"
+  | "last_year"
+  | "all";
+export type EmailProgressStage =
+  | "listing"
+  | "fetching"
+  | "analyzing"
+  | "synthesizing"
+  | "complete";
 
 export interface EmailAnalysisInput {
   range: EmailRange;
+  account?: GoogleAccount;
   aiProvider?: AiSelection["provider"];
   aiModel?: string;
 }
@@ -57,6 +77,7 @@ export interface EmailDigest {
 
 export interface EmailAnalysisResult {
   id: string;
+  account: GoogleAccount;
   range: EmailRange;
   query: string;
   messageCount: number;
@@ -81,24 +102,10 @@ export interface EmailAnalysisResult {
   };
 }
 
-async function getAccessToken(): Promise<string> {
-  const res = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    signal: AbortSignal.timeout(30_000),
-    body: new URLSearchParams({
-      client_id: process.env.GOOGLE_CLIENT_ID!,
-      client_secret: process.env.GOOGLE_CLIENT_SECRET!,
-      refresh_token: process.env.GOOGLE_REFRESH_TOKEN!,
-      grant_type: "refresh_token",
-    }),
-  });
-  if (!res.ok) throw new Error(`Google OAuth error (${res.status})`);
-  const data = await res.json() as { access_token: string };
-  return data.access_token;
-}
-
-function queryForRange(range: EmailRange): { query: string; maxMessages?: number } {
+function queryForRange(range: EmailRange): {
+  query: string;
+  maxMessages?: number;
+} {
   switch (range) {
     case "last_day":
       return { query: "in:anywhere newer_than:1d" };
@@ -122,11 +129,17 @@ async function gmailFetch<T>(token: string, path: string): Promise<T> {
     headers: { Authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(60_000),
   });
-  if (!res.ok) throw new Error(`Gmail API error ${res.status}: ${await res.text()}`);
+  if (!res.ok)
+    throw new Error(`Gmail API error ${res.status}: ${await res.text()}`);
   return res.json() as Promise<T>;
 }
 
-async function listMessages(token: string, query: string, maxMessages?: number, onProgress?: EmailProgress) {
+async function listMessages(
+  token: string,
+  query: string,
+  maxMessages?: number,
+  onProgress?: EmailProgress,
+) {
   const messages: GmailMessageListItem[] = [];
   let pageToken: string | undefined;
   do {
@@ -135,10 +148,17 @@ async function listMessages(token: string, query: string, maxMessages?: number, 
     url.searchParams.set("maxResults", "500");
     if (pageToken) url.searchParams.set("pageToken", pageToken);
     const path = `${url.pathname}${url.search}`;
-    const data = await gmailFetch<{ messages?: GmailMessageListItem[]; nextPageToken?: string }>(token, path.replace("/gmail/v1/users/me", ""));
+    const data = await gmailFetch<{
+      messages?: GmailMessageListItem[];
+      nextPageToken?: string;
+    }>(token, path.replace("/gmail/v1/users/me", ""));
     messages.push(...(data.messages ?? []));
     pageToken = data.nextPageToken;
-    onProgress?.({ progress: 3, stage: "listing", message: `Encontrados ${messages.length} mails` });
+    onProgress?.({
+      progress: 3,
+      stage: "listing",
+      message: `Encontrados ${messages.length} mails`,
+    });
     if (maxMessages && messages.length >= maxMessages) break;
   } while (pageToken);
   return maxMessages ? messages.slice(0, maxMessages) : messages;
@@ -150,16 +170,22 @@ function decodeBase64Url(data: string): string {
 }
 
 function header(payload: GmailPayload | undefined, name: string): string {
-  const found = payload?.headers?.find((item) => item.name.toLowerCase() === name.toLowerCase());
+  const found = payload?.headers?.find(
+    (item) => item.name.toLowerCase() === name.toLowerCase(),
+  );
   return found?.value ?? "";
 }
 
 function extractPayloadText(payload?: GmailPayload): string {
   if (!payload) return "";
-  const ownText = payload.body?.data && (payload.mimeType?.startsWith("text/plain") || payload.mimeType?.startsWith("text/html"))
-    ? decodeBase64Url(payload.body.data)
-    : "";
-  const childText = payload.parts?.map(extractPayloadText).filter(Boolean).join("\n") ?? "";
+  const ownText =
+    payload.body?.data &&
+    (payload.mimeType?.startsWith("text/plain") ||
+      payload.mimeType?.startsWith("text/html"))
+      ? decodeBase64Url(payload.body.data)
+      : "";
+  const childText =
+    payload.parts?.map(extractPayloadText).filter(Boolean).join("\n") ?? "";
   return `${ownText}\n${childText}`
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
@@ -170,13 +196,24 @@ function extractPayloadText(payload?: GmailPayload): string {
 
 function digestMessage(message: GmailMessage): EmailDigest {
   const labels = new Set(message.labelIds ?? []);
-  const direction = labels.has("SENT") ? "sent" : labels.has("INBOX") ? "received" : "mixed";
-  const body = extractPayloadText(message.payload).slice(0, MAX_BODY_CHARS_PER_EMAIL);
+  const direction = labels.has("SENT")
+    ? "sent"
+    : labels.has("INBOX")
+      ? "received"
+      : "mixed";
+  const body = extractPayloadText(message.payload).slice(
+    0,
+    MAX_BODY_CHARS_PER_EMAIL,
+  );
   return {
     id: message.id,
     threadId: message.threadId,
     direction,
-    date: header(message.payload, "Date") || (message.internalDate ? new Date(Number(message.internalDate)).toISOString() : ""),
+    date:
+      header(message.payload, "Date") ||
+      (message.internalDate
+        ? new Date(Number(message.internalDate)).toISOString()
+        : ""),
     from: header(message.payload, "From"),
     to: header(message.payload, "To"),
     subject: header(message.payload, "Subject") || "(sin asunto)",
@@ -187,18 +224,30 @@ function digestMessage(message: GmailMessage): EmailDigest {
 
 function chunkEmails(emails: EmailDigest[]): EmailDigest[][] {
   const chunks: EmailDigest[][] = [];
-  for (let i = 0; i < emails.length; i += EMAIL_BATCH_SIZE) chunks.push(emails.slice(i, i + EMAIL_BATCH_SIZE));
+  for (let i = 0; i < emails.length; i += EMAIL_BATCH_SIZE)
+    chunks.push(emails.slice(i, i + EMAIL_BATCH_SIZE));
   return chunks;
 }
 
 function asStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim() !== "") : [];
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is string =>
+          typeof item === "string" && item.trim() !== "",
+      )
+    : [];
 }
 
-function normalizeFinalAnalysis(value: unknown): EmailAnalysisResult["analysis"] {
-  const obj = value && typeof value === "object" ? value as Record<string, unknown> : {};
+function normalizeFinalAnalysis(
+  value: unknown,
+): EmailAnalysisResult["analysis"] {
+  const obj =
+    value && typeof value === "object"
+      ? (value as Record<string, unknown>)
+      : {};
   return {
-    executiveSummary: typeof obj.executiveSummary === "string" ? obj.executiveSummary : "",
+    executiveSummary:
+      typeof obj.executiveSummary === "string" ? obj.executiveSummary : "",
     behaviorPatterns: asStringArray(obj.behaviorPatterns),
     communicationStyle: asStringArray(obj.communicationStyle),
     priorityThemes: asStringArray(obj.priorityThemes),
@@ -215,16 +264,20 @@ function normalizeFinalAnalysis(value: unknown): EmailAnalysisResult["analysis"]
 }
 
 function formatEmailBatch(emails: EmailDigest[]): string {
-  return emails.map((email, index) => [
-    `#${index + 1}`,
-    `Direccion: ${email.direction}`,
-    `Fecha: ${email.date}`,
-    `De: ${email.from}`,
-    `Para: ${email.to}`,
-    `Asunto: ${email.subject}`,
-    `Snippet: ${email.snippet}`,
-    `Texto: ${email.body}`,
-  ].join("\n")).join("\n\n---\n\n");
+  return emails
+    .map((email, index) =>
+      [
+        `#${index + 1}`,
+        `Direccion: ${email.direction}`,
+        `Fecha: ${email.date}`,
+        `De: ${email.from}`,
+        `Para: ${email.to}`,
+        `Asunto: ${email.subject}`,
+        `Snippet: ${email.snippet}`,
+        `Texto: ${email.body}`,
+      ].join("\n"),
+    )
+    .join("\n\n---\n\n");
 }
 
 async function analyzeEmailBatch(
@@ -233,20 +286,23 @@ async function analyzeEmailBatch(
   totalBatches: number,
   selection?: AiSelection,
 ): Promise<unknown> {
-  return callAiJson([
-    {
-      role: "system",
-      content:
-        "Sos CLAUDIO analizando correo de Santiago. Analiza recibidos y enviados. Responde solo JSON valido y TODO el contenido textual en español claro con: summary, behaviorPatterns, communicationStyle, priorityThemes, urgentItems, awaitingYourReply, waitingOnOthers, keyPeople, projectsAndTopics, risks, opportunities, suggestedActions, tags.",
-    },
-    {
-      role: "user",
-      content:
-        `Lote ${batchIndex + 1} de ${totalBatches}. Analiza profundamente estos mails. ` +
-        "Distingui comportamientos de Santiago en enviados, demandas externas en recibidos y compromisos pendientes. No inventes. Escribi todos los hallazgos en español, aunque los mails estén en inglés.\n\n" +
-        formatEmailBatch(emails),
-    },
-  ], selection);
+  return callAiJson(
+    [
+      {
+        role: "system",
+        content:
+          "Sos CLAUDIO analizando correo de Santiago. Analiza recibidos y enviados. Responde solo JSON valido y TODO el contenido textual en español claro con: summary, behaviorPatterns, communicationStyle, priorityThemes, urgentItems, awaitingYourReply, waitingOnOthers, keyPeople, projectsAndTopics, risks, opportunities, suggestedActions, tags.",
+      },
+      {
+        role: "user",
+        content:
+          `Lote ${batchIndex + 1} de ${totalBatches}. Analiza profundamente estos mails. ` +
+          "Distingui comportamientos de Santiago en enviados, demandas externas en recibidos y compromisos pendientes. No inventes. Escribi todos los hallazgos en español, aunque los mails estén en inglés.\n\n" +
+          formatEmailBatch(emails),
+      },
+    ],
+    selection,
+  );
 }
 
 async function synthesizeEmailAnalysis(
@@ -254,36 +310,48 @@ async function synthesizeEmailAnalysis(
   range: EmailRange,
   selection?: AiSelection,
 ): Promise<EmailAnalysisResult["analysis"]> {
-  const parsed = await callAiJson([
-    {
-      role: "system",
-      content:
-        "Sos CLAUDIO. Tenes analisis parciales de correo de Santiago. Integra todo en un diagnostico profundo, accionable y prudente. Responde solo JSON valido y TODO el contenido textual en español claro con: executiveSummary, behaviorPatterns, communicationStyle, priorityThemes, urgentItems, awaitingYourReply, waitingOnOthers, keyPeople, projectsAndTopics, risks, opportunities, suggestedActions, tags.",
-    },
-    {
-      role: "user",
-      content:
-        `Rango analizado: ${range}\n\n` +
-        "Sintetiza estos analisis parciales en español. Priorizá: qué requiere respuesta, qué espera Santiago de otros, patrones de comportamiento, temas repetidos, riesgos y acciones concretas. Si los parciales están en inglés, traducilos y normalizalos al español.\n\n" +
-        JSON.stringify(partials).slice(0, 120_000),
-    },
-  ], selection);
+  const parsed = await callAiJson(
+    [
+      {
+        role: "system",
+        content:
+          "Sos CLAUDIO. Tenes analisis parciales de correo de Santiago. Integra todo en un diagnostico profundo, accionable y prudente. Responde solo JSON valido y TODO el contenido textual en español claro con: executiveSummary, behaviorPatterns, communicationStyle, priorityThemes, urgentItems, awaitingYourReply, waitingOnOthers, keyPeople, projectsAndTopics, risks, opportunities, suggestedActions, tags.",
+      },
+      {
+        role: "user",
+        content:
+          `Rango analizado: ${range}\n\n` +
+          "Sintetiza estos analisis parciales en español. Priorizá: qué requiere respuesta, qué espera Santiago de otros, patrones de comportamiento, temas repetidos, riesgos y acciones concretas. Si los parciales están en inglés, traducilos y normalizalos al español.\n\n" +
+          JSON.stringify(partials).slice(0, 120_000),
+      },
+    ],
+    selection,
+  );
   return normalizeFinalAnalysis(parsed);
 }
 
-export async function analyzeEmail(input: EmailAnalysisInput, onProgress?: EmailProgress): Promise<EmailAnalysisResult> {
-  if (!process.env.GOOGLE_REFRESH_TOKEN) throw new Error("Falta GOOGLE_REFRESH_TOKEN para leer Gmail.");
-  const token = await getAccessToken();
+export async function analyzeEmail(
+  input: EmailAnalysisInput,
+  onProgress?: EmailProgress,
+): Promise<EmailAnalysisResult> {
+  const account = input.account ?? "personal";
+  if (!hasGoogleAccount(account))
+    throw new Error(`Falta configurar la cuenta Google '${account}'.`);
+  const token = await getGoogleAccessToken(account);
   const { query, maxMessages } = queryForRange(input.range);
   const selection = { provider: input.aiProvider, model: input.aiModel };
 
   onProgress?.({ progress: 1, stage: "listing", message: "Buscando mails" });
   const refs = await listMessages(token, query, maxMessages, onProgress);
-  if (refs.length === 0) throw new Error("No se encontraron mails para ese rango.");
+  if (refs.length === 0)
+    throw new Error("No se encontraron mails para ese rango.");
 
   const emails: EmailDigest[] = [];
   for (let i = 0; i < refs.length; i += 1) {
-    const msg = await gmailFetch<GmailMessage>(token, `/messages/${refs[i].id}?format=full`);
+    const msg = await gmailFetch<GmailMessage>(
+      token,
+      `/messages/${refs[i].id}?format=full`,
+    );
     emails.push(digestMessage(msg));
     if (i % 10 === 0 || i === refs.length - 1) {
       onProgress?.({
@@ -302,17 +370,34 @@ export async function analyzeEmail(input: EmailAnalysisInput, onProgress?: Email
       stage: "analyzing",
       message: `Analizando lote ${i + 1} de ${batches.length}`,
     });
-    partials.push(await analyzeEmailBatch(batches[i], i, batches.length, selection));
+    partials.push(
+      await analyzeEmailBatch(batches[i], i, batches.length, selection),
+    );
   }
 
-  onProgress?.({ progress: 92, stage: "synthesizing", message: "Generando sintesis final" });
-  const analysis = await synthesizeEmailAnalysis(partials, input.range, selection);
+  onProgress?.({
+    progress: 92,
+    stage: "synthesizing",
+    message: "Generando sintesis final",
+  });
+  const analysis = await synthesizeEmailAnalysis(
+    partials,
+    input.range,
+    selection,
+  );
   const sentCount = emails.filter((email) => email.direction === "sent").length;
-  const receivedCount = emails.filter((email) => email.direction === "received").length;
+  const receivedCount = emails.filter(
+    (email) => email.direction === "received",
+  ).length;
 
-  onProgress?.({ progress: 100, stage: "complete", message: "Analisis completo" });
+  onProgress?.({
+    progress: 100,
+    stage: "complete",
+    message: "Analisis completo",
+  });
   return {
     id: randomUUID(),
+    account,
     range: input.range,
     query,
     messageCount: emails.length,

@@ -1,28 +1,16 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import {
+  GOOGLE_ACCOUNTS,
+  getGoogleAccessToken,
+  type GoogleAccount,
+} from "./google.js";
 
 function sanitizeHeaderValue(value: string, fieldName: string): string {
   if (/[\r\n\u0000]/.test(value)) {
     throw new Error(`Invalid ${fieldName}: header injection attempt blocked.`);
   }
   return value;
-}
-
-async function getAccessToken(): Promise<string> {
-  const res = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    signal: AbortSignal.timeout(30_000),
-    body: new URLSearchParams({
-      client_id: process.env.GOOGLE_CLIENT_ID!,
-      client_secret: process.env.GOOGLE_CLIENT_SECRET!,
-      refresh_token: process.env.GOOGLE_REFRESH_TOKEN!,
-      grant_type: "refresh_token",
-    }),
-  });
-  if (!res.ok) throw new Error(`Google OAuth error (${res.status})`);
-  const data = await res.json() as { access_token: string };
-  return data.access_token;
 }
 
 function buildRawMessage(params: {
@@ -50,7 +38,11 @@ function buildRawMessage(params: {
   ];
   if (safeCc?.length) lines.push(`Cc: ${safeCc.join(", ")}`);
   if (safeBcc?.length) lines.push(`Bcc: ${safeBcc.join(", ")}`);
-  if (safeReplyToMessageId) lines.push(`In-Reply-To: ${safeReplyToMessageId}`, `References: ${safeReplyToMessageId}`);
+  if (safeReplyToMessageId)
+    lines.push(
+      `In-Reply-To: ${safeReplyToMessageId}`,
+      `References: ${safeReplyToMessageId}`,
+    );
   lines.push("", params.body);
 
   return Buffer.from(lines.join("\r\n"))
@@ -70,21 +62,35 @@ export function registerGmailTools(server: McpServer) {
       body: z.string(),
       cc: z.array(z.string().email()).optional(),
       bcc: z.array(z.string().email()).optional(),
+      account: z.enum(GOOGLE_ACCOUNTS).default("personal"),
     },
-    async ({ to, subject, body, cc, bcc }) => {
-      const token = await getAccessToken();
+    async ({ to, subject, body, cc, bcc, account }) => {
+      const token = await getGoogleAccessToken(account as GoogleAccount);
       const raw = buildRawMessage({ to, subject, body, cc, bcc });
 
-      const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/drafts", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(30_000),
-        body: JSON.stringify({ message: { raw } }),
-      });
+      const res = await fetch(
+        "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          signal: AbortSignal.timeout(30_000),
+          body: JSON.stringify({ message: { raw } }),
+        },
+      );
       if (!res.ok) throw new Error(`Gmail draft error (${res.status})`);
 
-      return { content: [{ type: "text" as const, text: `Borrador creado -> Para: ${to.join(", ")} | Asunto: ${subject}` }] };
-    }
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Borrador creado -> Para: ${to.join(", ")} | Asunto: ${subject}`,
+          },
+        ],
+      };
+    },
   );
 
   if (process.env.CLAUDIO_ENABLE_GMAIL_WRITE === "true") {
@@ -97,22 +103,36 @@ export function registerGmailTools(server: McpServer) {
         body: z.string(),
         cc: z.array(z.string().email()).optional(),
         bcc: z.array(z.string().email()).optional(),
+        account: z.enum(GOOGLE_ACCOUNTS).default("personal"),
       },
-      async ({ to, subject, body, cc, bcc }) => {
-        const token = await getAccessToken();
+      async ({ to, subject, body, cc, bcc, account }) => {
+        const token = await getGoogleAccessToken(account as GoogleAccount);
         const raw = buildRawMessage({ to, subject, body, cc, bcc });
 
-        const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(30_000),
-          body: JSON.stringify({ raw }),
-        });
+        const res = await fetch(
+          "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            signal: AbortSignal.timeout(30_000),
+            body: JSON.stringify({ raw }),
+          },
+        );
         if (!res.ok) throw new Error(`Gmail send error (${res.status})`);
 
-        const data = await res.json() as { id: string };
-        return { content: [{ type: "text" as const, text: `Email enviado | Para: ${to.join(", ")} | Asunto: ${subject} | ID: ${data.id}` }] };
-      }
+        const data = (await res.json()) as { id: string };
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Email enviado | Para: ${to.join(", ")} | Asunto: ${subject} | ID: ${data.id}`,
+            },
+          ],
+        };
+      },
     );
   }
 }

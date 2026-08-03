@@ -113,9 +113,15 @@ async function main() {
   if (!profile) {
     db.prepare(`
       INSERT INTO profiles (id, display_name, email)
-      VALUES ('santiago', 'Santiago Jorge Isbert Perlender', 'sisbert@cinme.com.ar')
+      VALUES ('santiago', 'Santiago Jorge Isbert Perlender', 'santiagoip1973@gmail.com')
     `).run();
     console.log("Perfil de Santiago creado.");
+  } else {
+    db.prepare(`
+      UPDATE profiles
+      SET email = 'santiagoip1973@gmail.com'
+      WHERE id = 'santiago' AND email = 'sisbert@cinme.com.ar'
+    `).run();
   }
 
   db.prepare("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', '1')").run();
