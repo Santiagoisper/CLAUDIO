@@ -55,6 +55,7 @@ async function callOpenAICompatible(params: {
   model: string;
   messages: ChatMessage[];
   providerName: string;
+  useJsonResponseFormat?: boolean;
 }): Promise<unknown> {
   if (!params.apiKey) throw new Error(`Falta API key para ${params.providerName}.`);
   let lastError = "";
@@ -68,7 +69,9 @@ async function callOpenAICompatible(params: {
       body: JSON.stringify({
         model: params.model,
         temperature: 0.2,
-        response_format: { type: "json_object" },
+        ...(params.useJsonResponseFormat !== false
+          ? { response_format: { type: "json_object" } }
+          : {}),
         messages: params.messages,
       }),
     });
@@ -76,7 +79,16 @@ async function callOpenAICompatible(params: {
       const payload = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
       const content = payload.choices?.[0]?.message?.content;
       if (!content) throw new Error(`${params.providerName} no devolvio contenido.`);
-      return parseJsonObject(content);
+      try {
+        return parseJsonObject(content);
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : "El modelo no devolvió JSON válido.";
+        if (attempt < 5) {
+          await sleep(1_000 + attempt * 500);
+          continue;
+        }
+        break;
+      }
     }
 
     lastError = `${params.providerName} error ${res.status}: ${(await res.text()).slice(0, 300)}`;
@@ -175,6 +187,10 @@ export async function callAiJson(messages: ChatMessage[], selection?: AiSelectio
         model,
         messages,
         providerName: "Groq",
+        // Groq puede rechazar documentos largos antes de generar contenido cuando
+        // se activa response_format. El prompt mantiene el contrato JSON y se
+        // valida/reintenta localmente arriba.
+        useJsonResponseFormat: false,
       });
     case "deepseek":
       return callOpenAICompatible({
