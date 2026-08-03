@@ -434,6 +434,40 @@ function createRemoteApp() {
     return job;
   }
 
+  function persistEmailAnalysis(result: EmailAnalysisResult): void {
+    const content = [
+      `Análisis de correo (${result.account === "cinme" ? "CINME" : "Personal"}): ${result.range}`,
+      `Analizado: ${result.analyzedAt}. Mails: ${result.messageCount}; enviados: ${result.sentCount}; recibidos: ${result.receivedCount}; hilos: ${result.threadCount}.`,
+      "",
+      "Síntesis:",
+      result.analysis.executiveSummary,
+      "",
+      "Pendientes de tu respuesta:",
+      ...(result.analysis.awaitingYourReply ?? []).map((item) => `- ${item}`),
+      "",
+      "Esperando de otros:",
+      ...(result.analysis.waitingOnOthers ?? []).map((item) => `- ${item}`),
+      "",
+      "Temas prioritarios:",
+      ...(result.analysis.priorityThemes ?? []).map((item) => `- ${item}`),
+    ].join("\n").trim();
+    getDb().prepare(`
+      INSERT INTO memories (id, profile_id, kind, content, metadata_json)
+      VALUES (?, 'santiago', 'analisis_correo', ?, ?)
+    `).run(randomUUID(), content, JSON.stringify({
+      source: "gmail_analysis",
+      account: result.account,
+      range: result.range,
+      query: result.query,
+      messageCount: result.messageCount,
+      sentCount: result.sentCount,
+      receivedCount: result.receivedCount,
+      threadCount: result.threadCount,
+      analyzedAt: result.analyzedAt,
+      tags: result.analysis.tags,
+    }));
+  }
+
   app.post("/api/email/analyze", async (req: any, res: any) => {
     try {
       const range = req.body?.range ?? "last_day";
@@ -452,11 +486,16 @@ function createRemoteApp() {
         });
       })
         .then((result) => {
+          try {
+            persistEmailAnalysis(result);
+          } catch (error) {
+            console.error("[email/memory] no se pudo guardar el análisis:", error);
+          }
           updateEmailJob(job.id, {
             status: "complete",
             progress: 100,
             stage: "complete",
-            message: "Analisis completo",
+            message: "Analisis completo y guardado en memoria",
             result,
           });
         })
