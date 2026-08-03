@@ -180,7 +180,6 @@ export default function Home() {
       saveConfig(config.apiUrl, tokenInput.trim());
       setShowTokenForm(false);
       setTokenInput("");
-      window.location.reload();
     } else {
       toast.error("Ingresa un token válido");
     }
