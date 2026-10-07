@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import "dotenv/config";
 import { registerMemoryTools } from "./tools/memory.js";
 import { getPersonalGithubContext, refreshPersonalGithubContext, registerGithubTools } from "./tools/github.js";
+import { registerNotionTools } from "./tools/notion.js";
 import { registerShellTools } from "./tools/shell.js";
 import { registerWebTools } from "./tools/web.js";
 import {
@@ -142,6 +143,7 @@ function buildServer() {
   const s = new McpServer({ name: "claudio", version: "1.0.0" });
   registerMemoryTools(s);
   if (process.env.GITHUB_TOKEN) registerGithubTools(s);
+  if (process.env.NOTION_TOKEN) registerNotionTools(s);
   registerShellTools(s);
   registerWebTools(s);
   registerBriefingTools(s);
