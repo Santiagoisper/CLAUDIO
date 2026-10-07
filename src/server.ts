@@ -142,6 +142,7 @@ function buildServer() {
   const s = new McpServer({ name: "claudio", version: "1.0.0" });
   registerMemoryTools(s);
   if (process.env.GITHUB_TOKEN) registerGithubTools(s);
+  if (process.env.GITHUB_TOKEN) registerPortfolioTools(s);
   registerShellTools(s);
   registerWebTools(s);
   registerBriefingTools(s);

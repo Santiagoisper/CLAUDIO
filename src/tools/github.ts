@@ -58,7 +58,7 @@ function getGithubApiBaseUrl(): URL {
   return base;
 }
 
-async function ghFetch(path: string): Promise<unknown> {
+export async function ghFetch(path: string): Promise<unknown> {
   const base = getGithubApiBaseUrl();
   const res = await fetch(new URL(path, base), {
     signal: AbortSignal.timeout(30_000),

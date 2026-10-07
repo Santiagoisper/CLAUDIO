@@ -1,7 +1,11 @@
-import fs from "node:fs";
-import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { ghFetch } from "./github.js";
+
+// Escanea el portfolio de repos de Santiago via la API real de GitHub, no el
+// filesystem local: este servidor corre en Railway (la nube), sin acceso al
+// disco de su Mac/Windows. Antes leía C:\Users\Santiago\source\repos\... con
+// fs.readdirSync, lo que nunca pudo funcionar fuera de esa máquina puntual.
 
 interface RepoIndex {
   name: string;
@@ -13,175 +17,189 @@ interface RepoIndex {
   last_updated: string;
 }
 
+interface GHRepoMeta {
+  name: string;
+  full_name: string;
+  description: string | null;
+  html_url: string;
+  language: string | null;
+  updated_at: string;
+  default_branch: string;
+}
+
+interface GHTreeEntry {
+  path: string;
+  type: "blob" | "tree" | "commit";
+}
+
+interface GHTreeResponse {
+  tree: GHTreeEntry[];
+  truncated?: boolean;
+}
+
+// Presencia de estos archivos (en cualquier profundidad) delata el stack
+// técnico sin tener que clonar ni abrir el repo. No hace falta exhaustividad
+// perfecta, solo cubrir los ecosistemas más comunes.
+const TECH_STACK_MARKERS: Array<{ file: string; tech: string }> = [
+  { file: "package.json", tech: "Node.js" },
+  { file: "requirements.txt", tech: "Python" },
+  { file: "pyproject.toml", tech: "Python" },
+  { file: "go.mod", tech: "Go" },
+  { file: "cargo.toml", tech: "Rust" },
+  { file: "pom.xml", tech: "Java" },
+  { file: "build.gradle", tech: "Java/Kotlin" },
+  { file: "gemfile", tech: "Ruby" },
+  { file: "composer.json", tech: "PHP" },
+  { file: "tsconfig.json", tech: "TypeScript" },
+];
+
+function missingGithubTokenResult() {
+  return {
+    content: [{
+      type: "text" as const,
+      text: "GitHub no está configurado en CLAUDIO.",
+    }],
+  };
+}
+
+async function fetchRepoMeta(repoFullName: string): Promise<GHRepoMeta> {
+  return ghFetch(`/repos/${repoFullName}`) as Promise<GHRepoMeta>;
+}
+
+async function fetchRepoTree(repoFullName: string, sha: string): Promise<GHTreeResponse> {
+  return ghFetch(`/repos/${repoFullName}/git/trees/${sha}?recursive=1`) as Promise<GHTreeResponse>;
+}
+
+function detectTechStack(paths: string[], primaryLanguage: string | null): string[] {
+  const stack = new Set<string>();
+  if (primaryLanguage) stack.add(primaryLanguage);
+  const lowerPaths = paths.map((p) => p.toLowerCase());
+  for (const marker of TECH_STACK_MARKERS) {
+    if (lowerPaths.some((p) => p === marker.file || p.endsWith(`/${marker.file}`))) {
+      stack.add(marker.tech);
+    }
+  }
+  return [...stack];
+}
+
+function detectKeyFeatures(paths: string[]): string[] {
+  const features: string[] = [];
+  const lowerPaths = paths.map((p) => p.toLowerCase());
+
+  if (lowerPaths.some((p) => p.includes("/test") || p.startsWith("test") || p.includes("/spec") || p.includes(".test.") || p.includes(".spec."))) {
+    features.push("Tiene tests");
+  }
+  if (lowerPaths.some((p) => p === "dockerfile" || p.endsWith("/dockerfile") || p === "docker-compose.yml" || p.endsWith("/docker-compose.yml"))) {
+    features.push("Tiene Docker");
+  }
+  if (lowerPaths.some((p) => p.startsWith(".github/workflows/"))) {
+    features.push("Tiene CI (GitHub Actions)");
+  }
+  if (lowerPaths.some((p) => p === "readme.md")) {
+    features.push("Tiene README");
+  }
+  if (lowerPaths.some((p) => p.includes("/migrations/") || p.startsWith("migrations/"))) {
+    features.push("Tiene migraciones de DB");
+  }
+  return features;
+}
+
+async function buildRepoIndexFromMeta(meta: GHRepoMeta): Promise<RepoIndex> {
+  let paths: string[] = [];
+  let truncated = false;
+  try {
+    const tree = await fetchRepoTree(meta.full_name, meta.default_branch);
+    paths = tree.tree.filter((entry) => entry.type === "blob").map((entry) => entry.path);
+    truncated = Boolean(tree.truncated);
+  } catch {
+    // Repo vacío, rama por defecto sin árbol accesible, etc. — seguimos solo con metadata.
+  }
+
+  const key_features = detectKeyFeatures(paths);
+  if (truncated) key_features.push("Árbol de archivos truncado por GitHub (repo muy grande)");
+
+  return {
+    name: meta.name,
+    description: meta.description || meta.name,
+    tech_stack: detectTechStack(paths, meta.language),
+    key_features,
+    files_scanned: paths.length,
+    location: meta.html_url,
+    last_updated: meta.updated_at.slice(0, 10),
+  };
+}
+
+async function buildRepoIndex(repoFullName: string): Promise<RepoIndex> {
+  const meta = await fetchRepoMeta(repoFullName);
+  return buildRepoIndexFromMeta(meta);
+}
+
 export async function registerPortfolioTools(s: McpServer) {
   s.tool(
     "scan_repos_portfolio",
-    "Scan all repos in C:\\Users\\Santiago\\source\\repos\\Santiagoisper and return indexed knowledge",
+    "Escanea los repos de GitHub de Santiago (vía API, no filesystem local) y devuelve conocimiento indexado: stack técnico, features y metadata",
     {
-      base_path: z.string().optional().describe("Base path to scan (default: user's repos folder)"),
+      limit: z.number().int().min(1).max(50).default(20).describe("Cantidad de repos a escanear, ordenados por última actualización"),
+      repo: z.string().optional().describe("owner/repo puntual a escanear, en vez de listar los más recientes"),
     },
-    async (input) => {
-    const basePath = input.base_path || "C:\\Users\\Santiago\\source\\repos\\Santiagoisper";
-    const repos: RepoIndex[] = [];
-    
-    try {
-      const entries = fs.readdirSync(basePath, { withFileTypes: true })
-        .filter(e => e.isDirectory() && !e.name.startsWith("."))
-        .slice(0, 20);
+    async ({ limit, repo }) => {
+      if (!process.env.GITHUB_TOKEN) return missingGithubTokenResult();
 
-      for (const entry of entries) {
-        const repoPath = path.join(basePath, entry.name);
-        const repoIndex = await scanRepoFolder(repoPath, entry.name);
-        if (repoIndex) repos.push(repoIndex);
+      try {
+        const repos: RepoIndex[] = [];
+        if (repo) {
+          repos.push(await buildRepoIndex(repo));
+        } else {
+          const list = await ghFetch(
+            `/user/repos?sort=updated&direction=desc&per_page=${limit}`,
+          ) as GHRepoMeta[];
+          for (const meta of list) {
+            repos.push(await buildRepoIndexFromMeta(meta));
+          }
+        }
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify(repos, null, 2),
+          }],
+        };
+      } catch (e) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Error scanning repos: ${(e as Error).message}`,
+          }],
+        };
       }
-
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify(repos, null, 2)
-        }]
-      };
-    } catch (e) {
-      return {
-        content: [{
-          type: "text",
-          text: `Error scanning repos: ${(e as Error).message}`
-        }]
-      };
-    }
-  });
+    },
+  );
 
   s.tool(
     "get_repo_details",
-    "Get detailed information about a specific repo including README, package.json, and tech analysis",
+    "Devuelve información detallada de un repo de GitHub puntual: metadata, stack técnico y features detectados en el árbol de archivos",
     {
-      repo_name: z.string().describe("Name of the repo to analyze"),
+      repo: z.string().describe("owner/repo"),
     },
-    async (input) => {
-    const basePath = "C:\\Users\\Santiago\\source\\repos\\Santiagoisper";
-    const repoPath = path.join(basePath, input.repo_name);
+    async ({ repo }) => {
+      if (!process.env.GITHUB_TOKEN) return missingGithubTokenResult();
 
-    try {
-      const details = {
-        name: input.repo_name,
-        readme: null as string | null,
-        package_json: null as Record<string, any> | null,
-        structure: [] as string[],
-        analysis: ""
-      };
-
-      const readmePath = path.join(repoPath, "README.md");
-      if (fs.existsSync(readmePath)) {
-        details.readme = fs.readFileSync(readmePath, "utf-8").slice(0, 2000);
+      try {
+        const index = await buildRepoIndex(repo);
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify(index, null, 2),
+          }],
+        };
+      } catch (e) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Error reading repo: ${(e as Error).message}`,
+          }],
+        };
       }
-
-      const pkgPath = path.join(repoPath, "package.json");
-      if (fs.existsSync(pkgPath)) {
-        details.package_json = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
-      }
-
-      const dirs = fs.readdirSync(repoPath).filter(f => 
-        !f.startsWith(".") && fs.statSync(path.join(repoPath, f)).isDirectory()
-      ).slice(0, 10);
-      details.structure = dirs;
-
-      details.analysis = generateAnalysis(details);
-
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify(details, null, 2)
-        }]
-      };
-    } catch (e) {
-      return {
-        content: [{
-          type: "text",
-          text: `Error reading repo: ${(e as Error).message}`
-        }]
-      };
-    }
-  });
-}
-
-async function scanRepoFolder(repoPath: string, name: string): Promise<RepoIndex | null> {
-  try {
-    const readmePath = path.join(repoPath, "README.md");
-    const pkgPath = path.join(repoPath, "package.json");
-    
-    let description = "";
-    const tech_stack: string[] = [];
-    const key_features: string[] = [];
-
-    if (fs.existsSync(readmePath)) {
-      const content = fs.readFileSync(readmePath, "utf-8");
-      description = content.split("\n")[0].replace(/^#+\s*/, "");
-      
-      if (content.includes("Next.js")) tech_stack.push("Next.js");
-      if (content.includes("React")) tech_stack.push("React");
-      if (content.includes("TypeScript")) tech_stack.push("TypeScript");
-      if (content.includes("Python")) tech_stack.push("Python");
-      if (content.includes("Node")) tech_stack.push("Node.js");
-      if (content.includes("API")) key_features.push("API Backend");
-      if (content.includes("Database")) key_features.push("Database");
-      if (content.includes("Auth")) key_features.push("Authentication");
-    }
-
-    if (fs.existsSync(pkgPath)) {
-      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
-      
-      if (pkg.dependencies) {
-        if (pkg.dependencies.next) tech_stack.push("Next.js");
-        if (pkg.dependencies.react) tech_stack.push("React");
-        if (pkg.dependencies["@neondatabase/serverless"]) tech_stack.push("Neon DB");
-        if (pkg.dependencies["drizzle-orm"]) tech_stack.push("Drizzle ORM");
-        if (pkg.dependencies.tailwindcss) tech_stack.push("Tailwind CSS");
-        if (pkg.dependencies["react-dom"]) tech_stack.push("React DOM");
-      }
-
-      if (pkg.scripts) {
-        if (pkg.scripts.dev) key_features.push("Local Development");
-        if (pkg.scripts.build) key_features.push("Production Build");
-        if (pkg.scripts.test) key_features.push("Testing");
-      }
-    }
-
-    const files = fs.readdirSync(repoPath).length;
-
-    return {
-      name,
-      description: description || name,
-      tech_stack: [...new Set(tech_stack)],
-      key_features: [...new Set(key_features)],
-      files_scanned: files,
-      location: repoPath,
-      last_updated: new Date().toISOString().slice(0, 10)
-    };
-  } catch {
-    return null;
-  }
-}
-
-function generateAnalysis(details: any): string {
-  const parts: string[] = [];
-  
-  if (details.package_json?.name) {
-    parts.push(`Project: ${details.package_json.name}`);
-  }
-  
-  if (details.package_json?.scripts) {
-    const scripts = Object.keys(details.package_json.scripts);
-    parts.push(`Available scripts: ${scripts.join(", ")}`);
-  }
-
-  if (details.package_json?.dependencies) {
-    const depCount = Object.keys(details.package_json.dependencies).length;
-    parts.push(`Dependencies: ${depCount} packages`);
-  }
-
-  if (details.readme) {
-    parts.push("README found with documentation");
-  }
-
-  return parts.join(" | ");
+    },
+  );
 }
