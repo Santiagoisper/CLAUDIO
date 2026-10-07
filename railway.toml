@@ -4,5 +4,5 @@ builder = "nixpacks"
 [deploy]
 startCommand = "node --experimental-sqlite dist/server.js"
 healthcheckPath = "/health"
-healthcheckTimeout = 30
+healthcheckTimeout = 120
 restartPolicyType = "on_failure"
