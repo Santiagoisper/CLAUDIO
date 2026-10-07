@@ -20,6 +20,7 @@ import {
   listWhatsappWatchContacts,
   removeWhatsappWatchContact,
 } from "./tools/whatsapp.js";
+import { importWhatsappChat } from "./tools/whatsapp-import.js";
 import {
   registerBriefingTools,
   printBriefingToStderr,
@@ -658,6 +659,38 @@ function createRemoteApp() {
       return;
     }
     res.status(204).end();
+  });
+
+  // Imports an exported WhatsApp .txt: parses it, summarizes the conversation with the
+  // shared AI pipeline and stores only the summary as a `whatsapp_chat` memory. The raw
+  // transcript is never persisted. Same upload style as /api/documents/analyze-upload
+  // (x-file-name header + raw body). Synchronous on purpose: the caller wants the
+  // "memory saved" confirmation in the response, and chats take seconds, not minutes.
+  app.post("/api/whatsapp/import-upload", async (req: any, res: any) => {
+    try {
+      const rawFileName = req.headers["x-file-name"];
+      const rawAiProvider = req.headers["x-ai-provider"];
+      const rawAiModel = req.headers["x-ai-model"];
+      const fileName =
+        typeof rawFileName === "string"
+          ? decodeURIComponent(rawFileName)
+          : "chat-whatsapp.txt";
+      const aiProvider =
+        typeof rawAiProvider === "string" ? (rawAiProvider as any) : undefined;
+      const aiModel =
+        typeof rawAiModel === "string" ? decodeURIComponent(rawAiModel) : undefined;
+      const dataBuffer = await readRequestBuffer(req);
+      const result = await importWhatsappChat({
+        fileName,
+        dataBuffer,
+        aiProvider,
+        aiModel,
+      });
+      res.json(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(400).json({ error: message });
+    }
   });
 
   app.post("/mcp", async (req: any, res: any) => {
