@@ -138,6 +138,7 @@ async function summarizeChunk(
   index: number,
   total: number,
   selection?: AiSelection,
+  context?: string,
 ): Promise<DocumentAnalysis> {
   const parsed = await callAiJson([
     {
@@ -149,6 +150,7 @@ async function summarizeChunk(
       role: "user",
       content:
         `Archivo: ${fileName}\nBloque: ${index + 1} de ${total}\n\n` +
+        (context ? `Contexto: ${context}\n\n` : "") +
         "Resume este bloque con detalle suficiente para que otra pasada pueda reconstruir la idea completa del documento. " +
         "Inclui ideas, datos, acciones y etiquetas que aparezcan en este bloque. No inventes informacion.\n\n" +
         chunk,
@@ -161,6 +163,7 @@ async function synthesizeFinalAnalysis(
   fileName: string,
   partials: DocumentAnalysis[],
   selection?: AiSelection,
+  context?: string,
 ): Promise<DocumentAnalysis> {
   if (partials.length === 1) {
     return partials[0];
@@ -188,6 +191,7 @@ async function synthesizeFinalAnalysis(
       role: "user",
       content:
         `Archivo: ${fileName}\n\n` +
+        (context ? `Contexto: ${context}\n\n` : "") +
         "Estos son los resúmenes de todos los bloques del documento. Regurgitalos en una síntesis final coherente, completa y sin repeticiones. " +
         "No inventes informacion; si hay acciones o fechas, preservalas.\n\n" +
         partialText,
@@ -197,12 +201,24 @@ async function synthesizeFinalAnalysis(
   return normalizeAnalysis(parsed, fileName);
 }
 
-async function analyzeWithOpenAI(
-  fileName: string,
-  text: string,
-  selection?: AiSelection,
-  onProgress?: DocumentProgress,
+export interface AnalyzeTextInput {
+  fileName: string;
+  text: string;
+  /** Extra context handed to the model (e.g. "conversación de WhatsApp entre ..."). */
+  context?: string;
+  selection?: AiSelection;
+  onProgress?: DocumentProgress;
+}
+
+/**
+ * Runs the shared chunk -> summarize -> synthesize pipeline over already-extracted
+ * plain text. `analyzeDocument` uses it for files; other importers (WhatsApp chats)
+ * reuse it with their own text and `context`.
+ */
+export async function analyzeText(
+  input: AnalyzeTextInput,
 ): Promise<{ analysis: DocumentAnalysis; chunkCount: number }> {
+  const { fileName, text, context, selection, onProgress } = input;
   const chunks = chunkText(text, DOCUMENT_CHUNK_CHARS);
   const partials: DocumentAnalysis[] = [];
 
@@ -212,7 +228,7 @@ async function analyzeWithOpenAI(
       stage: "summarizing",
       message: `Analizando bloque ${index + 1} de ${chunks.length}`,
     });
-    partials.push(await summarizeChunk(fileName, chunks[index], index, chunks.length, selection));
+    partials.push(await summarizeChunk(fileName, chunks[index], index, chunks.length, selection, context));
     onProgress?.({
       progress: Math.max(2, Math.round(((index + 1) / chunks.length) * 85)),
       stage: "summarizing",
@@ -225,18 +241,16 @@ async function analyzeWithOpenAI(
     stage: "synthesizing",
     message: "Generando sintesis final",
   });
-  const analysis = await synthesizeFinalAnalysis(fileName, partials, selection);
+  const analysis = await synthesizeFinalAnalysis(fileName, partials, selection, context);
   return { analysis, chunkCount: chunks.length };
 }
 
-export function formatDocumentMemory(fileName: string, analysis: DocumentAnalysis): string {
-  const lines = [
-    `Documento: ${analysis.title || fileName}`,
-    `Archivo: ${fileName}`,
-    "",
-    "Resumen:",
-    analysis.summary,
-  ];
+/**
+ * Shared memory body for any AI analysis: resumen + ideas/datos/acciones/etiquetas.
+ * Keeps every importer (documents, WhatsApp chats) rendering the same sections.
+ */
+export function formatAnalysisSections(analysis: DocumentAnalysis): string[] {
+  const lines = ["Resumen:", analysis.summary];
 
   if (analysis.keyIdeas.length > 0) {
     lines.push("", "Ideas principales:", ...analysis.keyIdeas.map((idea) => `- ${idea}`));
@@ -251,7 +265,16 @@ export function formatDocumentMemory(fileName: string, analysis: DocumentAnalysi
     lines.push("", `Etiquetas: ${analysis.tags.join(", ")}`);
   }
 
-  return lines.join("\n").trim();
+  return lines;
+}
+
+export function formatDocumentMemory(fileName: string, analysis: DocumentAnalysis): string {
+  return [
+    `Documento: ${analysis.title || fileName}`,
+    `Archivo: ${fileName}`,
+    "",
+    ...formatAnalysisSections(analysis),
+  ].join("\n").trim();
 }
 
 export async function analyzeDocument(
@@ -277,12 +300,12 @@ export async function analyzeDocument(
     stage: "summarizing",
     message: "Texto extraido; iniciando analisis por bloques",
   });
-  const { analysis, chunkCount } = await analyzeWithOpenAI(
-    input.fileName,
+  const { analysis, chunkCount } = await analyzeText({
+    fileName: input.fileName,
     text,
-    { provider: input.aiProvider, model: input.aiModel },
+    selection: { provider: input.aiProvider, model: input.aiModel },
     onProgress,
-  );
+  });
   onProgress?.({
     progress: 100,
     stage: "complete",
