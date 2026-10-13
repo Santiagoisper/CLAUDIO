@@ -16,6 +16,7 @@ import { getPersonalGithubContext, refreshPersonalGithubContext, registerGithubT
 import { registerNotionTools } from "./tools/notion.js";
 import { registerShellTools } from "./tools/shell.js";
 import { registerWebTools } from "./tools/web.js";
+import { registerFalTools } from "./tools/fal.js";
 import {
   addWhatsappWatchContact,
   listWhatsappWatchContacts,
@@ -148,6 +149,7 @@ function buildServer() {
   if (process.env.NOTION_TOKEN) registerNotionTools(s);
   registerShellTools(s);
   registerWebTools(s);
+  if (process.env.FAL_KEY) registerFalTools(s);
   registerBriefingTools(s);
   if (hasGoogleAccount("personal") || hasGoogleAccount("cinme"))
     registerCalendarTools(s);
