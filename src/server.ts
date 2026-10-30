@@ -32,6 +32,10 @@ import { registerGmailTools } from "./tools/gmail.js";
 import { hasGoogleAccount, type GoogleAccount } from "./tools/google.js";
 import { registerPortfolioTools } from "./tools/portfolio.js";
 import {
+  getCapabilityInventory,
+  registerCapabilityTools,
+} from "./tools/capabilities.js";
+import {
   analyzeDocument,
   type DocumentAnalysisResult,
   type DocumentProgressStage,
@@ -143,6 +147,7 @@ function syncPush() {
 
 function buildServer() {
   const s = new McpServer({ name: "claudio", version: "1.0.0" });
+  registerCapabilityTools(s);
   registerMemoryTools(s);
   if (process.env.GITHUB_TOKEN) registerGithubTools(s);
   if (process.env.GITHUB_TOKEN) registerPortfolioTools(s);
@@ -298,6 +303,7 @@ function createRemoteApp() {
       req.path.startsWith("/api/chat") ||
       req.path.startsWith("/api/github") ||
       req.path.startsWith("/api/whatsapp") ||
+      req.path === "/api/capabilities" ||
       req.path === "/mcp" ||
       req.path === "/sse" ||
       req.path === "/messages"
@@ -308,6 +314,10 @@ function createRemoteApp() {
       }
     }
     next();
+  });
+
+  app.get("/api/capabilities", (_req: any, res: any) => {
+    res.json(getCapabilityInventory());
   });
 
   async function readRequestBuffer(req: IncomingMessage): Promise<Buffer> {
