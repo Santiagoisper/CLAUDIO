@@ -42,6 +42,8 @@ function hasAnyGoogleAccount(): boolean {
 
 export function getCapabilityInventory(): CapabilityInventory {
   const githubConfigured = Boolean(process.env.GITHUB_TOKEN?.trim());
+  const notionConfigured = Boolean(process.env.NOTION_TOKEN?.trim());
+  const falConfigured = Boolean(process.env.FAL_KEY?.trim());
   const shellEnabled = process.env.CLAUDIO_ENABLE_SHELL === "true";
   const googleConfigured = hasAnyGoogleAccount();
   const braveConfigured = Boolean(process.env.BRAVE_API_KEY?.trim());
@@ -71,6 +73,24 @@ export function getCapabilityInventory(): CapabilityInventory {
         : "Requiere GITHUB_TOKEN.",
     },
     {
+      name: "portfolio",
+      status: githubConfigured ? "registered" : "disabled",
+      configured: githubConfigured,
+      access: "read",
+      note: githubConfigured
+        ? "Inventario de repositorios registrado; requiere revisión de portabilidad."
+        : "Se registra junto con portfolio cuando existe GITHUB_TOKEN.",
+    },
+    {
+      name: "notion",
+      status: notionConfigured ? "registered" : "disabled",
+      configured: notionConfigured,
+      access: "read",
+      note: notionConfigured
+        ? "Búsqueda y lectura de páginas Notion disponibles."
+        : "Requiere NOTION_TOKEN.",
+    },
+    {
       name: "shell",
       status: shellEnabled ? "registered" : "disabled",
       configured: shellEnabled,
@@ -87,6 +107,15 @@ export function getCapabilityInventory(): CapabilityInventory {
       note: braveConfigured
         ? "Fetch web y búsqueda Brave disponibles."
         : "Fetch web disponible; búsqueda Brave requiere BRAVE_API_KEY.",
+    },
+    {
+      name: "fal_media",
+      status: falConfigured ? "registered" : "disabled",
+      configured: falConfigured,
+      access: "mixed",
+      note: falConfigured
+        ? "Generación de medios disponible mediante FAL."
+        : "Requiere FAL_KEY.",
     },
     {
       name: "briefing",
@@ -136,13 +165,18 @@ export function getCapabilityInventory(): CapabilityInventory {
       status: "http_api_only",
       note: "Contactos de WhatsApp expuestos por /api/whatsapp/contacts.",
     },
+    {
+      name: "whatsapp_import",
+      status: "http_api_only",
+      note: "Importación de chats de WhatsApp expuesta por /api/whatsapp/import-upload.",
+    },
   ];
 
   const knownGaps = [
     {
       name: "portfolio",
       reason:
-        "El módulo existe pero no se registra: usa una ruta Windows hardcodeada y necesita una raíz configurable con límites de lectura.",
+        "Está registrado condicionalmente, pero usa una ruta Windows hardcodeada y necesita una raíz configurable con límites de lectura para Mac y VPS.",
     },
   ];
 
