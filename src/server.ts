@@ -744,6 +744,12 @@ function createRemoteApp() {
     await t.handlePostMessage(req, res);
   });
 
+  // Reject GET probes on the MCP POST transport; never return the large web SPA.
+  app.get("/mcp", (_req: any, res: any) => {
+    res.setHeader("Allow", "POST");
+    res.status(405).json({ error: "Use POST /mcp" });
+  });
+
   // Sin build del front: cualquier GET que no sea otra ruta definida responde ayuda (evita "404" al abrir :3737 en el navegador).
   app.get("*", (req: any, res: any) => {
     if (hasBuiltWeb) {
